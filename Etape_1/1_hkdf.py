@@ -2,13 +2,13 @@ import hmac
 import hashlib
 import math as m
 
-def hkdf_extract(salt: bytes, ikm: bytes):
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
     if salt == b"":
         salt = bytes(32)
     PRK = hmac.digest(salt, ikm, hashlib.sha256)
     return PRK
 
-def hkdf_expand(prk: bytes, info: bytes, length: int):
+def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
     assert(length >= 0 and length <= 8160)
     if (length == 0):
         return b""
@@ -23,7 +23,7 @@ def hkdf_expand(prk: bytes, info: bytes, length: int):
 
 
 
-def hkdf(salt: bytes, ikm: bytes, info: bytes, length: int):
+def hkdf(salt: bytes, ikm: bytes, info: bytes, length: int) -> bytes:
     prk = hkdf_extract(salt, ikm)
     return hkdf_expand(prk, info, length)
 

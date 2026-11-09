@@ -7,4 +7,4 @@ class utilisateur :
         self.public_key = None
 
     def boite_magic(self, magic_number, cle1, cle2):
-        
+        pass

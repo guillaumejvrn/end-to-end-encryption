@@ -64,6 +64,22 @@ class RatchetState :
         # 6. Initialisation des clés de messages sautés
         self.MKSKIPPED = {}
 
+    def ratchet_encrypt(self, plaintext: bytes, ad: bytes) -> tuple[bytes, bytes]:
+
+        # Dérive une nouvelle clé de chaîne et une clé pour ce message
+        self.CKs, MK = kdf_ck(self.CKs)
+
+        # Construit le header avec notre clé publique DH
+        header_bytes = encode_header(self.DHs[1], self.PN, self.Ns)
+
+        # Chiffre le message avec la clé de message
+        ciphertext = encrypt_symmetric(MK, plaintext, ad)
+
+        # Passe au numéro de message suivant
+        self.Ns += 1
+
+        return header_bytes, ciphertext
+
     def ratchet_decrypt(self, header_bytes: bytes, ciphertext: bytes, ad: bytes) -> bytes:
 
         # 1. Décodage du header

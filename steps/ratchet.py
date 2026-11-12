@@ -1,31 +1,24 @@
-from header import decode_header, encode_header
-import hkdf
-from KDFRatchets import kdf_ck, kdf_rk
-from stream_cipher_authentication import encrypt_symmetric, decrypt_symmetric
-import X25519
+from steps.header import decode_header, encode_header
+from steps.KDFRatchets import kdf_ck, kdf_rk
+from steps.stream_cipher_authentication import encrypt_symmetric, decrypt_symmetric
+from steps.X25519 import x25519, generate_keypair
 
-class RatchetState :
 
+class RatchetState:
     MAX_SKIP = 100
 
-    def __init__(self) :
-
+    def __init__(self):
         self.RK = None
-
         self.CKs = None
         self.CKr = None
-
         self.DHs = None
         self.DHr = None
-
         self.Ns = 0
         self.Nr = 0
         self.PN = 0
-
         self.MKSKIPPED = {}
 
-    def init_alice(self, shared_key: bytes, bob_dh_pub: bytes) :
-
+    def init_alice(self, shared_key: bytes, bob_dh_pub: bytes):
         # 1. Initialisation de la clé racine
         self.RK = shared_key
 
@@ -41,8 +34,7 @@ class RatchetState :
         # 5. Dérivation des nouvelles clés
         self.RK, self.CKs = kdf_rk(self.RK, dh_out)
 
-    def init_bob(self, shared_key: bytes, bob_dh_pair: tuple[bytes, bytes]) :
-
+    def init_bob(self, shared_key: bytes, bob_dh_pair: tuple[bytes, bytes]):
         # 1. Initialisation de la clé racine
         self.RK = shared_key
 
@@ -64,7 +56,9 @@ class RatchetState :
         # 6. Initialisation des clés de messages sautés
         self.MKSKIPPED = {}
 
-    def ratchet_encrypt(self, plaintext: bytes, ad: bytes) -> tuple[bytes, bytes]:
+    def ratchet_encrypt(self, plaintext: bytes, ad: bytes = b"") -> tuple[bytes, bytes]:
+        if self.CKs is None:
+            raise RuntimeError("Chaîne d'envoi non initialisée (attendez un premier message).")
 
         # Dérive une nouvelle clé de chaîne et une clé pour ce message
         self.CKs, MK = kdf_ck(self.CKs)
@@ -72,30 +66,27 @@ class RatchetState :
         # Construit le header avec notre clé publique DH
         header_bytes = encode_header(self.DHs[1], self.PN, self.Ns)
 
-        # Chiffre le message avec la clé de message
-        ciphertext = encrypt_symmetric(MK, plaintext, ad)
+        # Chiffre le message en authentifiant aussi le header
+        ciphertext = encrypt_symmetric(MK, plaintext, ad + header_bytes)
 
         # Passe au numéro de message suivant
         self.Ns += 1
 
         return header_bytes, ciphertext
 
-    def ratchet_decrypt(self, header_bytes: bytes, ciphertext: bytes, ad: bytes) -> bytes:
-
+    def ratchet_decrypt(self, header_bytes: bytes, ciphertext: bytes, ad: bytes = b"") -> bytes:
         # 1. Décodage du header
         dh_pub, pn, n = decode_header(header_bytes)
 
         # 2. Vérification des clés de messages déjà sauvegardées
         if (dh_pub, n) in self.MKSKIPPED:
             MK = self.MKSKIPPED.pop((dh_pub, n))
-            return decrypt_symmetric(MK, ciphertext, ad)
+            return decrypt_symmetric(MK, ciphertext, ad + header_bytes)
 
         # 3. Vérification d'un éventuel changement de clé DH
         if dh_pub != self.DHr:
-
             # Sauvegarde les clés manquantes de l'ancienne chaîne
             self.skip_message_keys(pn)
-
             # Effectue le nouveau DH Ratchet
             self.dh_ratchet(dh_pub)
 
@@ -106,30 +97,22 @@ class RatchetState :
         self.CKr, MK = kdf_ck(self.CKr)
         self.Nr += 1
 
-        # 6. Déchiffre le message
-        plaintext = decrypt_symmetric(MK, ciphertext, ad)
-
-        return plaintext
+        # 6. Déchiffre le message en vérifiant l'authenticité du header
+        return decrypt_symmetric(MK, ciphertext, ad + header_bytes)
 
     def skip_message_keys(self, until: int):
+        if self.CKr is None and until > self.Nr:
+            raise ValueError("Chaîne de réception non initialisée")
 
         while self.Nr < until:
-
-            # Évite de dépasser la limite de messages ignorés
             if len(self.MKSKIPPED) >= RatchetState.MAX_SKIP:
                 raise Exception("Trop de messages en attente")
 
-            # Dérive la prochaine clé de réception et la clé du message
             self.CKr, MK = kdf_ck(self.CKr)
-
-            # Sauvegarde la clé pour pouvoir déchiffrer le message plus tard
             self.MKSKIPPED[(self.DHr, self.Nr)] = MK
-
-            # Passe au message suivant
             self.Nr += 1
 
     def dh_ratchet(self, dh_pub: bytes):
-
         # 1. Mise à jour des compteurs
         self.PN = self.Ns
         self.Ns = 0

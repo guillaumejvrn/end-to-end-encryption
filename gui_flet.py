@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 Interface Graphique Pédagogique (Flet) pour l'algorithme Double Ratchet.
-- Gauche : Schéma visuel interactif (diagramme de flux avec icônes, flèches et état en temps réel).
-- Droite : Chat classique entre Alice et Bob.
-- Haut   : Contrôles (Mode Tout d'un coup vs Pas à pas, Étape suivante +1, Finir le message, Msg retardé, Réinitialiser).
+Design épuré inspiré d'Apple (macOS / iMessage) :
+- Gauche : Schéma visuel interactif en temps réel (cartes minimalistes, lignes fines, palette système).
+- Droite : Messagerie style iMessage entre Alice et Bob.
+- Haut   : Barre d'outils sobre avec contrôle segmenté (Instantané / Pas à pas).
 """
 
 import secrets
@@ -24,7 +25,26 @@ BORDER = getattr(ft, "Border", getattr(ft, "border", None))
 ALIGNMENT = getattr(ft, "Alignment", getattr(ft, "alignment", None))
 CENTER_ALIGN = getattr(ALIGNMENT, "CENTER", getattr(ALIGNMENT, "center", None))
 
-AD = b"DoubleRatchetGUI-Oral-v1"
+# Palette Apple HIG (Light Mode)
+BG_WINDOW = "#F5F5F7"
+BG_CARD = "#FFFFFF"
+BG_SUBTLE = "#F2F2F7"
+BORDER_HAIRLINE = "#E5E5EA"
+BORDER_STRONG = "#D1D1D6"
+TEXT_PRIMARY = "#1D1D1F"
+TEXT_SECONDARY = "#6E6E73"
+TEXT_TERTIARY = "#8E8E93"
+
+ACCENT_BLUE = "#007AFF"
+ACCENT_BLUE_SOFT = "#EBF5FF"
+ACCENT_INDIGO = "#5856D6"
+ACCENT_INDIGO_SOFT = "#F0EFFF"
+ACCENT_GREEN = "#34C759"
+ACCENT_GREEN_SOFT = "#EAFBF0"
+ACCENT_ORANGE = "#FF9500"
+ACCENT_ORANGE_SOFT = "#FFF6E6"
+
+AD = b"DoubleRatchetGUI-v2"
 
 
 def set_btn_label(btn, label: str):
@@ -50,24 +70,23 @@ def short_hex(data: bytes | None, head: int = 5, tail: int = 4) -> str:
 
 def full_hex(data: bytes | None) -> str:
     if data is None:
-        return "None (non initialisé)"
+        return "Non initialisé"
     return data.hex()
 
 
-# Définition des 10 blocs visuels du schéma d'architecture Double Ratchet
+# Définition des 10 étapes du schéma Double Ratchet
 STEP_DEFINITIONS = [
     {
         "id": 0,
-        "short_title": "0. Init Session",
+        "short_title": "0. Initialisation",
         "title": "0. Initialisation X3DH",
-        "icon": "VPN_KEY",
-        "accent": COLORS.INDIGO_700,
+        "icon": "KEY",
         "func": "init_alice() / init_bob()",
         "default_actor": "Alice & Bob",
-        "default_desc": "RK initial + 1ère DH",
+        "default_desc": "RK partagée & 1ère DH",
         "default_vulga": (
             "Avant tout échange, Alice et Bob partagent une Clé Racine initiale (RK) et Bob a publié "
-            "sa clé publique X25519. Alice génère sa propre paire DH et calcule sa première chaîne d'envoi CKs."
+            "sa clé publique X25519. Alice génère sa paire DH et dérive sa première chaîne d'envoi CKs."
         ),
     },
     {
@@ -75,97 +94,90 @@ STEP_DEFINITIONS = [
         "short_title": "1. KDF Envoi",
         "title": "1. Ratchet Symétrique (Envoi)",
         "icon": "SYNC_ALT",
-        "accent": COLORS.BLUE_700,
-        "func": "kdf_ck(CKs) → (CKs', MK)",
+        "func": "kdf_ck(CKs)",
         "default_actor": "Expéditeur",
-        "default_desc": "Avance CKs → clé MK",
+        "default_desc": "Dérive MK unique",
         "default_vulga": (
-            "L'expéditeur passe sa Clé de Chaîne d'envoi (CKs) dans HMAC-SHA256 pour produire deux clés : "
-            "la prochaine CKs et une Clé de Message (MK) à usage unique (Forward Secrecy)."
+            "L'expéditeur fait avancer sa Clé de Chaîne d'envoi (CKs) via HMAC-SHA256 pour obtenir "
+            "une nouvelle CKs et une Clé de Message (MK) à usage unique (Forward Secrecy)."
         ),
     },
     {
         "id": 2,
         "short_title": "2. En-tête",
-        "title": "2. Construction En-tête",
-        "icon": "LABEL_IMPORTANT",
-        "accent": COLORS.CYAN_700,
+        "title": "2. Encodage de l'en-tête",
+        "icon": "TAG",
         "func": "encode_header(DHs, PN, Ns)",
         "default_actor": "Expéditeur",
-        "default_desc": "DHs_pub + PN + N (40B)",
+        "default_desc": "DHs_pub + PN + N (40 o)",
         "default_vulga": (
-            "L'expéditeur construit l'en-tête de 40 octets contenant sa clé publique Diffie-Hellman actuelle, "
+            "L'expéditeur assemble l'en-tête de 40 octets : sa clé publique Diffie-Hellman actuelle, "
             "la longueur de la chaîne précédente (PN) et le numéro du message courant (N)."
         ),
     },
     {
         "id": 3,
         "short_title": "3. Chiffrement",
-        "title": "3. Chiffrement & HMAC",
-        "icon": "LOCK",
-        "accent": COLORS.TEAL_700,
-        "func": "encrypt_symmetric(MK, msg, AD)",
+        "title": "3. Chiffrement & Signature HMAC",
+        "icon": "LOCK_OUTLINE",
+        "func": "encrypt_symmetric(MK, msg)",
         "default_actor": "Expéditeur",
-        "default_desc": "XOR + Tag HMAC-SHA256",
+        "default_desc": "Flux XOR + Tag HMAC",
         "default_vulga": (
-            "Avec la clé unique MK, le texte est chiffré par flux avec un Nonce aléatoire (12B), puis signé "
-            "par un tag HMAC-SHA256 couvrant aussi l'en-tête pour empêcher toute falsification."
+            "Le texte est chiffré avec la clé MK et un Nonce aléatoire (12 octets), puis signé par "
+            "un tag HMAC-SHA256 couvrant également l'en-tête pour garantir son intégrité."
         ),
     },
     {
         "id": 4,
-        "short_title": "4. Lecture Header",
-        "title": "4. Réception & Lecture En-tête",
-        "icon": "FIND_IN_PAGE",
-        "accent": COLORS.CYAN_800,
+        "short_title": "4. Lecture En-tête",
+        "title": "4. Décodage de l'en-tête",
+        "icon": "SEARCH",
         "func": "decode_header(header)",
         "default_actor": "Destinataire",
-        "default_desc": "Teste si DH_pub a changé",
+        "default_desc": "Vérifie rotation DH",
         "default_vulga": (
-            "Le destinataire lit l'en-tête reçu et compare la clé publique DH de l'expéditeur avec celle "
-            "qu'il connaissait : si elle est nouvelle, un Ratchet DH asymétrique est déclenché."
+            "Le destinataire extrait la clé publique DH de l'expéditeur et vérifie si elle a changé "
+            "depuis le dernier message reçu, ce qui déclenche un Ratchet asymétrique."
         ),
     },
     {
         "id": 5,
-        "short_title": "5. Coffre Sauts",
-        "title": "5. Gestion Hors-Ordre (MKSKIPPED)",
-        "icon": "INVENTORY_2",
-        "accent": COLORS.AMBER_800,
-        "func": "skip_message_keys() / MKSKIPPED",
+        "short_title": "5. Hors-Ordre",
+        "title": "5. Gestion des messages sautés",
+        "icon": "INVENTORY_2_OUTLINED",
+        "func": "skip_message_keys()",
         "default_actor": "Destinataire",
-        "default_desc": "Archive/récupère clés retardées",
+        "default_desc": "Coffre MKSKIPPED",
         "default_vulga": (
-            "Si un message arrive en avance ou en retard par rapport au compteur Nr, les clés intermédiaires "
-            "sont mises de côté (ou récupérées) dans le dictionnaire MKSKIPPED."
+            "Si des messages manquent à l'appel ou arrivent en retard, leurs clés MK sont archivées "
+            "ou récupérées dans le dictionnaire MKSKIPPED."
         ),
     },
     {
         "id": 6,
         "short_title": "6. Ratchet DH #1",
-        "title": "6. Ratchet DH #1 (Réception)",
+        "title": "6. Ratchet DH (Réception)",
         "icon": "AUTORENEW",
-        "accent": COLORS.DEEP_PURPLE_700,
-        "func": "x25519() + kdf_rk(RK, dh1)",
+        "func": "x25519() + kdf_rk()",
         "default_actor": "Destinataire",
-        "default_desc": "Renouvelle RK + crée CKr",
+        "default_desc": "Renouvelle RK & CKr",
         "default_vulga": (
-            "Lors d'un changement de tour de parole, le destinataire combine sa clé privée actuelle avec la "
-            "nouvelle clé publique reçue (Curve25519) pour régénérer la Clé Racine RK et sa chaîne CKr."
+            "Lors d'un changement de tour de parole, le destinataire combine sa clé privée actuelle "
+            "avec la nouvelle clé publique reçue (Curve25519) pour dériver RK et CKr."
         ),
     },
     {
         "id": 7,
         "short_title": "7. Ratchet DH #2",
-        "title": "7. Ratchet DH #2 (Nouvelle clé)",
-        "icon": "ENHANCED_ENCRYPTION",
-        "accent": COLORS.PURPLE_700,
+        "title": "7. Ratchet DH (Nouvelle clé)",
+        "icon": "ENHANCED_ENCRYPTION_OUTLINED",
         "func": "generate_keypair() + kdf_rk()",
         "default_actor": "Destinataire",
-        "default_desc": "Nouvelle paire DHs + CKs",
+        "default_desc": "Nouvelle paire DHs & CKs",
         "default_vulga": (
-            "Le destinataire génère immédiatement une nouvelle paire de clés X25519 pour sa future réponse "
-            "et re-mélange RK pour créer sa nouvelle chaîne d'envoi CKs (guérison post-compromission)."
+            "Le destinataire génère une nouvelle paire X25519 pour sa future réponse et re-mélange RK "
+            "afin de créer sa nouvelle chaîne d'envoi CKs (guérison post-compromission)."
         ),
     },
     {
@@ -173,34 +185,32 @@ STEP_DEFINITIONS = [
         "short_title": "8. KDF Réception",
         "title": "8. Ratchet Symétrique (Réception)",
         "icon": "SYNC",
-        "accent": COLORS.BLUE_800,
-        "func": "kdf_ck(CKr) → (CKr', MK)",
+        "func": "kdf_ck(CKr)",
         "default_actor": "Destinataire",
-        "default_desc": "Avance CKr → retrouve MK",
+        "default_desc": "Retrouve la clé MK",
         "default_vulga": (
-            "Le destinataire fait avancer sa chaîne de réception d'un cran via HMAC-SHA256 et obtient "
-            "la clé MK identique à celle calculée par l'expéditeur à l'étape 1."
+            "Le destinataire fait avancer sa chaîne de réception CKr d'un cran via HMAC-SHA256 et "
+            "retrouve la clé MK identique à celle utilisée lors de l'envoi."
         ),
     },
     {
         "id": 9,
         "short_title": "9. Déchiffrement",
         "title": "9. Vérification HMAC & Déchiffrement",
-        "icon": "LOCK_OPEN",
-        "accent": COLORS.GREEN_700,
+        "icon": "LOCK_OPEN_OUTLINED",
         "func": "decrypt_symmetric(MK, paquet)",
         "default_actor": "Destinataire",
-        "default_desc": "Valide HMAC → texte clair",
+        "default_desc": "Validation & texte clair",
         "default_vulga": (
             "Le destinataire vérifie d'abord l'authenticité via HMAC-SHA256, puis déchiffre le message "
-            "qui apparaît en clair dans la discussion."
+            "qui s'affiche en clair dans la conversation."
         ),
     },
 ]
 
 
 class StepUpdate:
-    """Mise à jour atomique d'un bloc du schéma visuel."""
+    """Mise à jour atomique d'une carte du schéma visuel."""
 
     def __init__(
         self,
@@ -226,12 +236,12 @@ class StepUpdate:
 class DoubleRatchetApp:
     def __init__(self, page: ft.Page):
         self.page = page
-        self.page.title = "Double Ratchet — Schéma Visuel Temps Réel & Chat E2EE"
-        self.page.window.width = 1480
-        self.page.window.height = 920
-        self.page.padding = 10
+        self.page.title = "Double Ratchet — Démonstrateur E2EE"
+        self.page.window.width = 1440
+        self.page.window.height = 900
+        self.page.padding = 16
         self.page.theme_mode = ft.ThemeMode.LIGHT
-        self.page.bgcolor = COLORS.BLUE_GREY_50
+        self.page.bgcolor = BG_WINDOW
 
         # États cryptographiques
         self.alice: RatchetState = RatchetState()
@@ -239,13 +249,13 @@ class DoubleRatchetApp:
         self.shared_key: bytes = b""
         self.bob_initial_dh: tuple[bytes, bytes] = (b"", b"")
 
-        # État des 10 blocs du schéma
+        # État des 10 cartes du schéma
         self.row_states: dict[int, dict] = {}
         self.selected_row_id: int = 0
         self.active_row_id: int | None = None
 
-        # État visuel du canal réseau au centre du schéma
-        self.network_status_text: str = "Canal réseau inactif — Envoyez un message à droite"
+        # État du canal réseau
+        self.network_status_text: str = "Canal prêt — En attente d'un message"
         self.network_is_active: bool = False
         self.current_sender: str = "Alice"
         self.current_receiver: str = "Bob"
@@ -254,7 +264,7 @@ class DoubleRatchetApp:
         self.pending_updates: list[StepUpdate] = []
         self.delayed_packets: list[dict] = []
 
-        # Mode par défaut : pas à pas (incrémentation)
+        # Mode par défaut : pas à pas
         self.execution_mode: str = "step"
 
         self._build_ui()
@@ -272,14 +282,13 @@ class DoubleRatchetApp:
                 "short_title": item["short_title"],
                 "title": item["title"],
                 "icon": item["icon"],
-                "accent": item["accent"],
                 "func": item["func"],
-                "status": "pending",  # "pending" | "done" | "skipped"
+                "status": "pending",
                 "actor": item["default_actor"],
                 "live_value": item["default_desc"],
                 "vulgarisation": item["default_vulga"],
-                "inputs_detail": "En attente de l'exécution de cette étape…",
-                "outputs_detail": "En attente de l'exécution de cette étape…",
+                "inputs_detail": "En attente d'exécution…",
+                "outputs_detail": "En attente d'exécution…",
             }
 
     def _prepare_nodes_for_new_message(self, sender_name: str, receiver_name: str):
@@ -291,7 +300,7 @@ class DoubleRatchetApp:
                 continue
             self.row_states[rid]["status"] = "pending"
             self.row_states[rid]["actor"] = sender_name if rid in (1, 2, 3) else receiver_name
-            self.row_states[rid]["live_value"] = "En attente…"
+            self.row_states[rid]["live_value"] = "En attente"
             self.row_states[rid]["vulgarisation"] = item["default_vulga"]
             self.row_states[rid]["inputs_detail"] = "Pas encore exécutée pour ce message."
             self.row_states[rid]["outputs_detail"] = "Pas encore exécutée pour ce message."
@@ -312,22 +321,22 @@ class DoubleRatchetApp:
 
         self.current_sender = "Alice"
         self.current_receiver = "Bob"
-        self.network_status_text = "Session prête — Aucun paquet en transit"
+        self.network_status_text = "Session initialisée — Canal prêt"
         self.network_is_active = False
 
         # Bloc 0 (Initialisation) actif dès le départ
         self.row_states[0]["status"] = "done"
         self.row_states[0]["actor"] = "Alice & Bob"
-        self.row_states[0]["live_value"] = f"RK={short_hex(self.alice.RK)} | CKs={short_hex(self.alice.CKs)}"
+        self.row_states[0]["live_value"] = f"RK {short_hex(self.alice.RK)} · CKs {short_hex(self.alice.CKs)}"
         self.row_states[0]["inputs_detail"] = (
-            f"• Secret partagé (shared_key) : {full_hex(self.shared_key)}\n"
-            f"• Clé publique DH initiale Bob : {full_hex(self.bob_initial_dh[1])}"
+            f"Secret partagé (RK) : {full_hex(self.shared_key)}\n"
+            f"Clé publique DH Bob : {full_hex(self.bob_initial_dh[1])}"
         )
         self.row_states[0]["outputs_detail"] = (
-            f"• Alice RK  : {full_hex(self.alice.RK)}\n"
-            f"• Alice CKs : {full_hex(self.alice.CKs)}\n"
-            f"• Alice DHs (pub) : {full_hex(self.alice.DHs[1])}\n"
-            f"• Bob RK    : {full_hex(self.bob.RK)} (prêt à recevoir)"
+            f"Alice RK  : {full_hex(self.alice.RK)}\n"
+            f"Alice CKs : {full_hex(self.alice.CKs)}\n"
+            f"Alice DHs : {full_hex(self.alice.DHs[1])}\n"
+            f"Bob RK    : {full_hex(self.bob.RK)}"
         )
 
         self.selected_row_id = 0
@@ -336,133 +345,186 @@ class DoubleRatchetApp:
         self.chat_list.controls.clear()
         self.chat_list.controls.append(
             self._make_system_banner(
-                f"Session E2EE initialisée (X3DH simulé)\n"
-                f"Secret initial RK : {short_hex(self.shared_key)} | Clé DH Bob : {short_hex(self.bob_initial_dh[1])}"
+                f"Session chiffrée initialisée · RK {short_hex(self.shared_key)}"
             )
         )
 
         self._refresh_all_ui()
         if not initial:
-            self._notify("Session et schéma visuel réinitialisés avec de nouvelles clés.")
+            self._notify("Session réinitialisée.")
 
     # ------------------------------------------------------------------
-    # Construction de l'interface Flet
+    # Construction de l'interface style Apple / macOS
     # ------------------------------------------------------------------
+    def _card_shadow(self):
+        return ft.BoxShadow(
+            spread_radius=0,
+            blur_radius=12,
+            color="#0D000000",
+            offset=ft.Offset(0, 3),
+        )
+
     def _build_ui(self):
-        # --- Barre supérieure (Contrôles) ---
-        self.mode_instant_btn = BUTTON(
-            "⚡ Tout d'un coup",
+        # --- Contrôle segmenté style macOS pour le mode d'exécution ---
+        self.seg_instant = ft.Container(
+            content=ft.Text("Instantané", size=12, weight=ft.FontWeight.W_500),
+            padding=PADDING.symmetric(horizontal=12, vertical=5),
+            border_radius=7,
             on_click=lambda _: self._set_mode("instant"),
         )
-        self.mode_step_btn = BUTTON(
-            "👣 Pas à pas (+1)",
+        self.seg_step = ft.Container(
+            content=ft.Text("Pas à pas", size=12, weight=ft.FontWeight.W_500),
+            padding=PADDING.symmetric(horizontal=12, vertical=5),
+            border_radius=7,
             on_click=lambda _: self._set_mode("step"),
         )
+        segmented_control = ft.Container(
+            bgcolor=BG_SUBTLE,
+            padding=2,
+            border_radius=9,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+            content=ft.Row(spacing=2, controls=[self.seg_instant, self.seg_step]),
+        )
 
+        # --- Boutons d'action sobres ---
         self.next_step_btn = BUTTON(
-            "Étape suivante (+1)",
-            icon=get_icon("SKIP_NEXT"),
-            bgcolor=COLORS.GREEN_700,
+            "Étape suivante",
+            icon=get_icon("ARROW_FORWARD_IOS", "SKIP_NEXT"),
+            bgcolor=ACCENT_BLUE,
             color=COLORS.WHITE,
+            style=ft.ButtonStyle(
+                shape=ft.RoundedRectangleBorder(radius=8),
+                elevation=0,
+            ),
             on_click=self._on_next_step_click,
             disabled=True,
         )
 
         self.finish_all_btn = ft.OutlinedButton(
-            "Finir le message",
-            icon=get_icon("FAST_FORWARD"),
+            "Terminer",
+            style=ft.ButtonStyle(
+                shape=ft.RoundedRectangleBorder(radius=8),
+                side=ft.BorderSide(1, BORDER_STRONG),
+                color=TEXT_PRIMARY,
+            ),
             on_click=self._on_finish_all_click,
             disabled=True,
         )
 
         self.deliver_delayed_btn = ft.OutlinedButton(
-            "Livrer msg retardé (0)",
-            icon=get_icon("MARK_EMAIL_UNREAD"),
+            "Livrer retardé (0)",
+            style=ft.ButtonStyle(
+                shape=ft.RoundedRectangleBorder(radius=8),
+                side=ft.BorderSide(1, BORDER_STRONG),
+                color=TEXT_PRIMARY,
+            ),
             on_click=self._on_deliver_delayed_click,
             disabled=True,
         )
 
-        self.reset_btn = ft.OutlinedButton(
-            "Réinitialiser",
+        self.reset_btn = ft.IconButton(
             icon=get_icon("REFRESH"),
+            icon_color=TEXT_SECONDARY,
+            icon_size=19,
+            tooltip="Réinitialiser la session",
             on_click=lambda _: self._reset_session(initial=False),
         )
 
-        self.status_pill = ft.Container(
-            content=ft.Text("Prêt", size=12, weight=ft.FontWeight.BOLD, color=COLORS.WHITE),
-            bgcolor=COLORS.BLUE_GREY_700,
-            padding=PADDING.symmetric(horizontal=10, vertical=6),
+        self.status_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor=ACCENT_GREEN)
+        self.status_label = ft.Text("Synchronisé", size=12, weight=ft.FontWeight.W_500, color=TEXT_SECONDARY)
+        status_pill = ft.Container(
+            bgcolor=BG_SUBTLE,
+            padding=PADDING.symmetric(horizontal=10, vertical=5),
             border_radius=12,
+            content=ft.Row(spacing=6, controls=[self.status_dot, self.status_label]),
         )
 
         top_bar = ft.Container(
-            bgcolor=COLORS.WHITE,
-            padding=10,
-            border_radius=10,
-            border=BORDER.all(1, COLORS.BLUE_GREY_200),
+            bgcolor=BG_CARD,
+            padding=PADDING.symmetric(horizontal=16, vertical=10),
+            border_radius=14,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+            shadow=self._card_shadow(),
             content=ft.Row(
                 wrap=True,
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
                     ft.Row(
-                        spacing=8,
+                        spacing=10,
                         controls=[
-                            ft.Icon(get_icon("ACCOUNT_TREE", "LOCK"), color=COLORS.INDIGO_700, size=24),
-                            ft.Text(
-                                "Double Ratchet — Schéma Visuel Temps Réel",
-                                size=17,
-                                weight=ft.FontWeight.BOLD,
-                                color=COLORS.BLUE_GREY_900,
+                            ft.Container(
+                                width=30,
+                                height=30,
+                                border_radius=8,
+                                bgcolor=ACCENT_BLUE,
+                                alignment=CENTER_ALIGN,
+                                content=ft.Icon(get_icon("LOCK"), color=COLORS.WHITE, size=16),
+                            ),
+                            ft.Column(
+                                spacing=0,
+                                controls=[
+                                    ft.Text(
+                                        "Double Ratchet",
+                                        size=15,
+                                        weight=ft.FontWeight.W_600,
+                                        color=TEXT_PRIMARY,
+                                    ),
+                                    ft.Text(
+                                        "Protocole de chiffrement de bout en bout",
+                                        size=11,
+                                        color=TEXT_SECONDARY,
+                                    ),
+                                ],
                             ),
                         ],
                     ),
                     ft.Row(
                         wrap=True,
-                        spacing=8,
+                        spacing=10,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            self.mode_instant_btn,
-                            self.mode_step_btn,
-                            ft.VerticalDivider(width=6),
+                            segmented_control,
                             self.next_step_btn,
                             self.finish_all_btn,
-                            ft.VerticalDivider(width=6),
                             self.deliver_delayed_btn,
+                            status_pill,
                             self.reset_btn,
-                            self.status_pill,
                         ],
                     ),
                 ],
             ),
         )
 
-        # --- PANNEAU GAUCHE : Schéma Visuel Temps Réel + Inspecteur détaillé ---
-        self.alice_state_text = ft.Text("", size=11, font_family="monospace")
-        self.bob_state_text = ft.Text("", size=11, font_family="monospace")
+        # --- PANNEAU GAUCHE : Schéma visuel épuré + Inspecteur ---
+        self.alice_state_text = ft.Text("", size=11, font_family="monospace", color=TEXT_SECONDARY)
+        self.bob_state_text = ft.Text("", size=11, font_family="monospace", color=TEXT_SECONDARY)
 
         actors_header = ft.Row(
-            spacing=8,
+            spacing=10,
             controls=[
                 ft.Container(
                     expand=True,
-                    bgcolor=COLORS.BLUE_50,
-                    padding=8,
-                    border_radius=8,
-                    border=BORDER.all(1.5, COLORS.BLUE_300),
+                    bgcolor=BG_SUBTLE,
+                    padding=10,
+                    border_radius=12,
+                    border=BORDER.all(1, BORDER_HAIRLINE),
                     content=ft.Row(
-                        spacing=8,
+                        spacing=10,
                         controls=[
                             ft.Container(
-                                bgcolor=COLORS.BLUE_700,
-                                padding=8,
-                                border_radius=8,
-                                content=ft.Icon(get_icon("PERSON"), color=COLORS.WHITE, size=20),
+                                width=32,
+                                height=32,
+                                border_radius=16,
+                                bgcolor=ACCENT_BLUE,
+                                alignment=CENTER_ALIGN,
+                                content=ft.Text("A", size=14, weight=ft.FontWeight.W_600, color=COLORS.WHITE),
                             ),
                             ft.Column(
-                                spacing=1,
+                                spacing=2,
                                 expand=True,
                                 controls=[
-                                    ft.Text("ALICE (Client A)", size=12, weight=ft.FontWeight.BOLD, color=COLORS.BLUE_900),
+                                    ft.Text("Alice", size=13, weight=ft.FontWeight.W_600, color=TEXT_PRIMARY),
                                     self.alice_state_text,
                                 ],
                             ),
@@ -471,24 +533,26 @@ class DoubleRatchetApp:
                 ),
                 ft.Container(
                     expand=True,
-                    bgcolor=COLORS.PURPLE_50,
-                    padding=8,
-                    border_radius=8,
-                    border=BORDER.all(1.5, COLORS.PURPLE_300),
+                    bgcolor=BG_SUBTLE,
+                    padding=10,
+                    border_radius=12,
+                    border=BORDER.all(1, BORDER_HAIRLINE),
                     content=ft.Row(
-                        spacing=8,
+                        spacing=10,
                         controls=[
                             ft.Container(
-                                bgcolor=COLORS.PURPLE_700,
-                                padding=8,
-                                border_radius=8,
-                                content=ft.Icon(get_icon("PERSON_OUTLINE", "PERSON"), color=COLORS.WHITE, size=20),
+                                width=32,
+                                height=32,
+                                border_radius=16,
+                                bgcolor=ACCENT_INDIGO,
+                                alignment=CENTER_ALIGN,
+                                content=ft.Text("B", size=14, weight=ft.FontWeight.W_600, color=COLORS.WHITE),
                             ),
                             ft.Column(
-                                spacing=1,
+                                spacing=2,
                                 expand=True,
                                 controls=[
-                                    ft.Text("BOB (Client B)", size=12, weight=ft.FontWeight.BOLD, color=COLORS.PURPLE_900),
+                                    ft.Text("Bob", size=13, weight=ft.FontWeight.W_600, color=TEXT_PRIMARY),
                                     self.bob_state_text,
                                 ],
                             ),
@@ -498,63 +562,62 @@ class DoubleRatchetApp:
             ],
         )
 
-        # Conteneur dynamique qui contient le diagramme visuel complet
         self.schema_container = ft.Column(
             spacing=6,
             scroll=ft.ScrollMode.AUTO,
             expand=True,
         )
 
-        # Inspecteur détaillé en bas à gauche
-        self.detail_title = ft.Text(
-            "Détail du bloc sélectionné",
-            size=13,
-            weight=ft.FontWeight.BOLD,
-            color=COLORS.INDIGO_900,
-        )
-        self.detail_vulgarisation = ft.Text("", size=12, color=COLORS.BLUE_GREY_900)
-        self.detail_inputs = ft.Text("", size=10.5, font_family="monospace", color=COLORS.BLUE_GREY_800, selectable=True)
-        self.detail_outputs = ft.Text("", size=10.5, font_family="monospace", color=COLORS.TEAL_900, selectable=True)
+        # Inspecteur bas de page style macOS Inspector
+        self.detail_title = ft.Text("", size=13, weight=ft.FontWeight.W_600, color=TEXT_PRIMARY)
+        self.detail_func = ft.Text("", size=11, font_family="monospace", color=ACCENT_BLUE)
+        self.detail_vulgarisation = ft.Text("", size=12, color=TEXT_SECONDARY)
+        self.detail_inputs = ft.Text("", size=10.5, font_family="monospace", color=TEXT_PRIMARY, selectable=True)
+        self.detail_outputs = ft.Text("", size=10.5, font_family="monospace", color=TEXT_PRIMARY, selectable=True)
 
         detail_panel = ft.Container(
-            bgcolor=COLORS.INDIGO_50,
-            padding=10,
-            border_radius=8,
-            border=BORDER.all(1, COLORS.INDIGO_200),
+            bgcolor=BG_SUBTLE,
+            padding=12,
+            border_radius=12,
+            border=BORDER.all(1, BORDER_HAIRLINE),
             height=175,
             content=ft.Column(
                 scroll=ft.ScrollMode.AUTO,
-                spacing=4,
+                spacing=6,
                 controls=[
-                    self.detail_title,
-                    self.detail_vulgarisation,
-                    ft.Divider(height=4),
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[self.detail_title, self.detail_func],
+                    ),
+                    self.detail_vulgarisation,
+                    ft.Row(
+                        spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.START,
                         controls=[
                             ft.Container(
                                 expand=True,
-                                bgcolor=COLORS.WHITE,
-                                padding=6,
-                                border_radius=6,
+                                bgcolor=BG_CARD,
+                                padding=8,
+                                border_radius=8,
+                                border=BORDER.all(1, BORDER_HAIRLINE),
                                 content=ft.Column(
-                                    spacing=2,
+                                    spacing=3,
                                     controls=[
-                                        ft.Text("ENTRÉES / AVANT", size=10, weight=ft.FontWeight.BOLD, color=COLORS.BLUE_GREY_600),
+                                        ft.Text("ENTRÉES", size=10, weight=ft.FontWeight.W_600, color=TEXT_TERTIARY),
                                         self.detail_inputs,
                                     ],
                                 ),
                             ),
                             ft.Container(
                                 expand=True,
-                                bgcolor=COLORS.WHITE,
-                                padding=6,
-                                border_radius=6,
+                                bgcolor=BG_CARD,
+                                padding=8,
+                                border_radius=8,
+                                border=BORDER.all(1, BORDER_HAIRLINE),
                                 content=ft.Column(
-                                    spacing=2,
+                                    spacing=3,
                                     controls=[
-                                        ft.Text("SORTIES / APRÈS", size=10, weight=ft.FontWeight.BOLD, color=COLORS.TEAL_700),
+                                        ft.Text("SORTIES", size=10, weight=ft.FontWeight.W_600, color=TEXT_TERTIARY),
                                         self.detail_outputs,
                                     ],
                                 ),
@@ -567,28 +630,29 @@ class DoubleRatchetApp:
 
         left_pane = ft.Container(
             expand=6,
-            bgcolor=COLORS.WHITE,
-            padding=10,
-            border_radius=10,
-            border=BORDER.all(1, COLORS.BLUE_GREY_200),
+            bgcolor=BG_CARD,
+            padding=14,
+            border_radius=16,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+            shadow=self._card_shadow(),
             content=ft.Column(
-                spacing=8,
+                spacing=10,
                 controls=[
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Text(
-                                "Architecture & Flux Cryptographique (Cliquez sur un bloc pour inspecter)",
+                                "Flux cryptographique",
                                 size=14,
-                                weight=ft.FontWeight.BOLD,
-                                color=COLORS.BLUE_GREY_900,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_PRIMARY,
                             ),
                             ft.Row(
-                                spacing=6,
+                                spacing=10,
                                 controls=[
-                                    self._legend_dot(COLORS.ORANGE_600, "En cours"),
-                                    self._legend_dot(COLORS.GREEN_700, "Exécuté"),
-                                    self._legend_dot(COLORS.BLUE_GREY_400, "Sauté"),
+                                    self._legend_dot(ACCENT_ORANGE, "En cours"),
+                                    self._legend_dot(ACCENT_GREEN, "Exécuté"),
+                                    self._legend_dot(BORDER_STRONG, "Sauté"),
                                 ],
                             ),
                         ],
@@ -600,53 +664,74 @@ class DoubleRatchetApp:
             ),
         )
 
-        # --- PANNEAU DROIT : Chat classique Alice <-> Bob ---
+        # --- PANNEAU DROIT : Style iMessage ---
         self.chat_list = ft.ListView(
             expand=True,
-            spacing=10,
+            spacing=8,
             auto_scroll=True,
-            padding=10,
+            padding=12,
         )
 
         self.alice_input = ft.TextField(
-            hint_text="Message d'Alice vers Bob…",
+            hint_text="Message d'Alice…",
             expand=True,
             dense=True,
+            border_radius=18,
+            bgcolor=BG_CARD,
+            border_color=BORDER_STRONG,
+            focused_border_color=ACCENT_BLUE,
+            text_size=13,
+            content_padding=PADDING.symmetric(horizontal=14, vertical=8),
             on_submit=lambda _: self._handle_send("Alice", "Bob", delayed=False),
         )
         self.bob_input = ft.TextField(
-            hint_text="Message de Bob vers Alice…",
+            hint_text="Message de Bob…",
             expand=True,
             dense=True,
+            border_radius=18,
+            bgcolor=BG_CARD,
+            border_color=BORDER_STRONG,
+            focused_border_color=ACCENT_INDIGO,
+            text_size=13,
+            content_padding=PADDING.symmetric(horizontal=14, vertical=8),
             on_submit=lambda _: self._handle_send("Bob", "Alice", delayed=False),
         )
 
         alice_controls = ft.Container(
-            bgcolor=COLORS.BLUE_50,
-            padding=8,
-            border_radius=8,
-            border=BORDER.all(1, COLORS.BLUE_200),
+            bgcolor=BG_SUBTLE,
+            padding=10,
+            border_radius=12,
+            border=BORDER.all(1, BORDER_HAIRLINE),
             content=ft.Column(
                 spacing=6,
                 controls=[
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Text("Alice (Gauche du chat)", size=12, weight=ft.FontWeight.BOLD, color=COLORS.BLUE_900),
+                            ft.Row(
+                                spacing=6,
+                                controls=[
+                                    ft.Container(width=8, height=8, border_radius=4, bgcolor=ACCENT_BLUE),
+                                    ft.Text("Alice", size=12, weight=ft.FontWeight.W_600, color=TEXT_PRIMARY),
+                                ],
+                            ),
                             ft.TextButton(
-                                "Envoyer en retard (hors-ordre)",
+                                "Simuler retard",
+                                style=ft.ButtonStyle(color=TEXT_SECONDARY, padding=0),
                                 on_click=lambda _: self._handle_send("Alice", "Bob", delayed=True),
                             ),
                         ],
                     ),
                     ft.Row(
-                        spacing=6,
+                        spacing=8,
                         controls=[
                             self.alice_input,
-                            BUTTON(
-                                "Envoyer",
-                                bgcolor=COLORS.BLUE_700,
-                                color=COLORS.WHITE,
+                            ft.IconButton(
+                                icon=get_icon("ARROW_UPWARD"),
+                                bgcolor=ACCENT_BLUE,
+                                icon_color=COLORS.WHITE,
+                                icon_size=18,
+                                tooltip="Envoyer",
                                 on_click=lambda _: self._handle_send("Alice", "Bob", delayed=False),
                             ),
                         ],
@@ -656,31 +741,40 @@ class DoubleRatchetApp:
         )
 
         bob_controls = ft.Container(
-            bgcolor=COLORS.PURPLE_50,
-            padding=8,
-            border_radius=8,
-            border=BORDER.all(1, COLORS.PURPLE_200),
+            bgcolor=BG_SUBTLE,
+            padding=10,
+            border_radius=12,
+            border=BORDER.all(1, BORDER_HAIRLINE),
             content=ft.Column(
                 spacing=6,
                 controls=[
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Text("Bob (Droite du chat)", size=12, weight=ft.FontWeight.BOLD, color=COLORS.PURPLE_900),
+                            ft.Row(
+                                spacing=6,
+                                controls=[
+                                    ft.Container(width=8, height=8, border_radius=4, bgcolor=ACCENT_INDIGO),
+                                    ft.Text("Bob", size=12, weight=ft.FontWeight.W_600, color=TEXT_PRIMARY),
+                                ],
+                            ),
                             ft.TextButton(
-                                "Envoyer en retard (hors-ordre)",
+                                "Simuler retard",
+                                style=ft.ButtonStyle(color=TEXT_SECONDARY, padding=0),
                                 on_click=lambda _: self._handle_send("Bob", "Alice", delayed=True),
                             ),
                         ],
                     ),
                     ft.Row(
-                        spacing=6,
+                        spacing=8,
                         controls=[
                             self.bob_input,
-                            BUTTON(
-                                "Envoyer",
-                                bgcolor=COLORS.PURPLE_700,
-                                color=COLORS.WHITE,
+                            ft.IconButton(
+                                icon=get_icon("ARROW_UPWARD"),
+                                bgcolor=ACCENT_INDIGO,
+                                icon_color=COLORS.WHITE,
+                                icon_size=18,
+                                tooltip="Envoyer",
                                 on_click=lambda _: self._handle_send("Bob", "Alice", delayed=False),
                             ),
                         ],
@@ -691,36 +785,37 @@ class DoubleRatchetApp:
 
         right_pane = ft.Container(
             expand=4,
-            bgcolor=COLORS.WHITE,
-            padding=10,
-            border_radius=10,
-            border=BORDER.all(1, COLORS.BLUE_GREY_200),
+            bgcolor=BG_CARD,
+            padding=14,
+            border_radius=16,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+            shadow=self._card_shadow(),
             content=ft.Column(
-                spacing=8,
+                spacing=10,
                 controls=[
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Text(
-                                "Discussion Chiffrée (Alice ↔ Bob)",
+                                "Messages",
                                 size=14,
-                                weight=ft.FontWeight.BOLD,
-                                color=COLORS.BLUE_GREY_900,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_PRIMARY,
                             ),
                             ft.Row(
                                 spacing=4,
                                 controls=[
-                                    ft.Icon(get_icon("VERIFIED_USER"), color=COLORS.GREEN_700, size=16),
-                                    ft.Text("E2EE Actif", size=12, color=COLORS.GREEN_700, weight=ft.FontWeight.BOLD),
+                                    ft.Icon(get_icon("LOCK"), color=TEXT_TERTIARY, size=13),
+                                    ft.Text("Chiffré de bout en bout", size=11, color=TEXT_TERTIARY),
                                 ],
                             ),
                         ],
                     ),
                     ft.Container(
                         expand=True,
-                        bgcolor=COLORS.BLUE_GREY_50,
-                        border_radius=8,
-                        border=BORDER.all(1, COLORS.BLUE_GREY_200),
+                        bgcolor=BG_WINDOW,
+                        border_radius=12,
+                        border=BORDER.all(1, BORDER_HAIRLINE),
                         content=self.chat_list,
                     ),
                     alice_controls,
@@ -732,12 +827,12 @@ class DoubleRatchetApp:
         self.page.add(
             ft.Column(
                 expand=True,
-                spacing=8,
+                spacing=12,
                 controls=[
                     top_bar,
                     ft.Row(
                         expand=True,
-                        spacing=10,
+                        spacing=14,
                         vertical_alignment=ft.CrossAxisAlignment.STRETCH,
                         controls=[left_pane, right_pane],
                     ),
@@ -748,15 +843,15 @@ class DoubleRatchetApp:
 
     def _legend_dot(self, color: str, label: str) -> ft.Control:
         return ft.Row(
-            spacing=3,
+            spacing=4,
             controls=[
-                ft.Container(width=10, height=10, bgcolor=color, border_radius=5),
-                ft.Text(label, size=10, color=COLORS.BLUE_GREY_700),
+                ft.Container(width=8, height=8, bgcolor=color, border_radius=4),
+                ft.Text(label, size=11, color=TEXT_SECONDARY),
             ],
         )
 
     # ------------------------------------------------------------------
-    # Construction visuelle d'un bloc (nœud) et des flèches du schéma
+    # Cartes minimalistes et connecteurs du schéma visuel
     # ------------------------------------------------------------------
     def _build_node_card(self, rid: int, expand: bool = True) -> ft.Control:
         st = self.row_states[rid]
@@ -764,138 +859,101 @@ class DoubleRatchetApp:
         is_active = rid == self.active_row_id
         is_selected = rid == self.selected_row_id
 
-        # Couleurs dynamiques selon l'état en temps réel
         if is_active and status == "done":
-            bg_color = COLORS.AMBER_50
-            border_color = COLORS.ORANGE_600
-            border_width = 2.5
-            icon_bg = COLORS.ORANGE_600
-            icon_color = COLORS.WHITE
-            badge_text = "▶ EN COURS"
-            badge_bg = COLORS.ORANGE_700
-            badge_fg = COLORS.WHITE
-            title_color = COLORS.BLUE_GREY_900
+            bg_color = ACCENT_ORANGE_SOFT
+            border_color = ACCENT_ORANGE
+            border_width = 1.8
+            icon_color = ACCENT_ORANGE
+            dot_color = ACCENT_ORANGE
+            title_color = TEXT_PRIMARY
+            val_color = TEXT_PRIMARY
         elif status == "done":
-            bg_color = COLORS.GREEN_50 if not is_selected else COLORS.INDIGO_50
-            border_color = COLORS.INDIGO_600 if is_selected else COLORS.GREEN_600
-            border_width = 2.0 if is_selected else 1.5
-            icon_bg = st["accent"]
-            icon_color = COLORS.WHITE
-            badge_text = "✓ OK"
-            badge_bg = COLORS.GREEN_700
-            badge_fg = COLORS.WHITE
-            title_color = COLORS.BLUE_GREY_900
+            bg_color = BG_CARD
+            border_color = ACCENT_BLUE if is_selected else ACCENT_GREEN
+            border_width = 1.6 if is_selected else 1.2
+            icon_color = ACCENT_GREEN
+            dot_color = ACCENT_GREEN
+            title_color = TEXT_PRIMARY
+            val_color = TEXT_PRIMARY
         elif status == "skipped":
-            bg_color = COLORS.BLUE_GREY_50
-            border_color = COLORS.INDIGO_400 if is_selected else COLORS.BLUE_GREY_300
-            border_width = 1.5 if is_selected else 1.0
-            icon_bg = COLORS.BLUE_GREY_200
-            icon_color = COLORS.BLUE_GREY_600
-            badge_text = "⏭ SAUTÉ"
-            badge_bg = COLORS.BLUE_GREY_300
-            badge_fg = COLORS.BLUE_GREY_800
-            title_color = COLORS.BLUE_GREY_500
+            bg_color = BG_SUBTLE
+            border_color = ACCENT_BLUE if is_selected else BORDER_HAIRLINE
+            border_width = 1.4 if is_selected else 1.0
+            icon_color = TEXT_TERTIARY
+            dot_color = BORDER_STRONG
+            title_color = TEXT_TERTIARY
+            val_color = TEXT_TERTIARY
         else:  # pending
-            bg_color = COLORS.WHITE if not is_selected else COLORS.INDIGO_50
-            border_color = COLORS.INDIGO_400 if is_selected else COLORS.BLUE_GREY_200
-            border_width = 1.5 if is_selected else 1.0
-            icon_bg = COLORS.BLUE_GREY_100
-            icon_color = COLORS.BLUE_GREY_500
-            badge_text = "⏳"
-            badge_bg = COLORS.BLUE_GREY_100
-            badge_fg = COLORS.BLUE_GREY_600
-            title_color = COLORS.BLUE_GREY_600
+            bg_color = BG_CARD
+            border_color = ACCENT_BLUE if is_selected else BORDER_HAIRLINE
+            border_width = 1.4 if is_selected else 1.0
+            icon_color = TEXT_TERTIARY
+            dot_color = BORDER_HAIRLINE
+            title_color = TEXT_SECONDARY
+            val_color = TEXT_TERTIARY
 
-        card = ft.Container(
+        return ft.Container(
             expand=expand,
             bgcolor=bg_color,
             border=BORDER.all(border_width, border_color),
             border_radius=10,
-            padding=8,
+            padding=PADDING.symmetric(horizontal=9, vertical=7),
             on_click=lambda _, r=rid: self._select_row(r),
             content=ft.Column(
-                spacing=4,
+                spacing=3,
                 controls=[
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
                             ft.Row(
-                                spacing=6,
+                                spacing=5,
                                 controls=[
-                                    ft.Container(
-                                        bgcolor=icon_bg,
-                                        padding=5,
-                                        border_radius=7,
-                                        content=ft.Icon(get_icon(st["icon"]), color=icon_color, size=16),
-                                    ),
+                                    ft.Icon(get_icon(st["icon"]), color=icon_color, size=14),
                                     ft.Text(
                                         st["short_title"],
                                         size=11.5,
-                                        weight=ft.FontWeight.BOLD,
+                                        weight=ft.FontWeight.W_600,
                                         color=title_color,
                                     ),
                                 ],
                             ),
-                            ft.Container(
-                                bgcolor=badge_bg,
-                                padding=PADDING.symmetric(horizontal=5, vertical=2),
-                                border_radius=5,
-                                content=ft.Text(badge_text, size=9, weight=ft.FontWeight.BOLD, color=badge_fg),
-                            ),
+                            ft.Container(width=7, height=7, border_radius=3.5, bgcolor=dot_color),
                         ],
                     ),
                     ft.Text(
-                        st["func"],
-                        size=9.5,
+                        st["live_value"],
+                        size=10,
                         font_family="monospace",
-                        color=COLORS.INDIGO_800 if status == "done" else COLORS.BLUE_GREY_500,
+                        color=val_color,
                         max_lines=1,
                         overflow=ft.TextOverflow.ELLIPSIS,
-                    ),
-                    ft.Container(
-                        bgcolor=COLORS.WHITE if status == "done" else COLORS.BLUE_GREY_50,
-                        padding=PADDING.symmetric(horizontal=6, vertical=3),
-                        border_radius=5,
-                        border=BORDER.all(0.5, COLORS.BLUE_GREY_200),
-                        content=ft.Text(
-                            st["live_value"],
-                            size=10,
-                            font_family="monospace",
-                            weight=ft.FontWeight.W_600 if status == "done" else ft.FontWeight.NORMAL,
-                            color=COLORS.BLACK if status == "done" else COLORS.BLUE_GREY_500,
-                            max_lines=1,
-                            overflow=ft.TextOverflow.ELLIPSIS,
-                        ),
                     ),
                 ],
             ),
         )
-        return card
 
     def _arrow_right(self, active: bool = False) -> ft.Control:
         return ft.Icon(
-            get_icon("ARROW_FORWARD"),
-            color=COLORS.GREEN_700 if active else COLORS.BLUE_GREY_300,
-            size=18,
+            get_icon("CHEVRON_RIGHT", "ARROW_FORWARD"),
+            color=ACCENT_GREEN if active else BORDER_STRONG,
+            size=16,
         )
 
     def _arrow_down(self, active: bool = False, label: str = "") -> ft.Control:
         controls = [
             ft.Icon(
-                get_icon("ARROW_DOWNWARD"),
-                color=COLORS.GREEN_700 if active else COLORS.BLUE_GREY_300,
-                size=18,
+                get_icon("SOUTH", "ARROW_DOWNWARD"),
+                color=ACCENT_GREEN if active else BORDER_STRONG,
+                size=14,
             )
         ]
         if label:
             controls.append(
                 ft.Text(
                     label,
-                    size=10,
-                    italic=True,
-                    weight=ft.FontWeight.BOLD if active else ft.FontWeight.NORMAL,
-                    color=COLORS.GREEN_800 if active else COLORS.BLUE_GREY_500,
+                    size=10.5,
+                    color=TEXT_PRIMARY if active else TEXT_TERTIARY,
                 )
             )
         return ft.Row(
@@ -905,39 +963,31 @@ class DoubleRatchetApp:
         )
 
     def _rebuild_visual_schema(self):
-        """Construit le diagramme d'architecture visuel complet avec les états en temps réel."""
         s = self.row_states
-        sender_color = COLORS.BLUE_800 if self.current_sender == "Alice" else COLORS.PURPLE_800
-        sender_bg = COLORS.BLUE_50 if self.current_sender == "Alice" else COLORS.PURPLE_50
-        sender_border = COLORS.BLUE_200 if self.current_sender == "Alice" else COLORS.PURPLE_200
+        sender_accent = ACCENT_BLUE if self.current_sender == "Alice" else ACCENT_INDIGO
+        recv_accent = ACCENT_INDIGO if self.current_receiver == "Bob" else ACCENT_BLUE
 
-        recv_color = COLORS.PURPLE_800 if self.current_receiver == "Bob" else COLORS.BLUE_800
-        recv_bg = COLORS.PURPLE_50 if self.current_receiver == "Bob" else COLORS.BLUE_50
-        recv_border = COLORS.PURPLE_200 if self.current_receiver == "Bob" else COLORS.BLUE_200
+        # 1. Initialisation
+        init_row = ft.Row(controls=[self._build_node_card(0, expand=True)])
 
-        # 1. Bloc Initialisation (tout en haut)
-        init_row = ft.Row(
-            controls=[self._build_node_card(0, expand=True)],
-        )
-
-        # 2. Zone Expéditeur (Étapes 1 -> 2 -> 3)
+        # 2. Zone Expéditeur
         sender_zone = ft.Container(
-            bgcolor=sender_bg,
-            border=BORDER.all(1, sender_border),
-            border_radius=10,
-            padding=8,
+            bgcolor=BG_SUBTLE,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+            border_radius=12,
+            padding=9,
             content=ft.Column(
                 spacing=6,
                 controls=[
                     ft.Row(
                         spacing=6,
                         controls=[
-                            ft.Icon(get_icon("SEND"), color=sender_color, size=15),
+                            ft.Container(width=6, height=6, border_radius=3, bgcolor=sender_accent),
                             ft.Text(
-                                f"CÔTÉ EXPÉDITEUR ({self.current_sender.upper()}) — Préparation & Chiffrement",
+                                f"Expéditeur · {self.current_sender}",
                                 size=11,
-                                weight=ft.FontWeight.BOLD,
-                                color=sender_color,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_SECONDARY,
                             ),
                         ],
                     ),
@@ -956,54 +1006,51 @@ class DoubleRatchetApp:
             ),
         )
 
-        # 3. Passerelle Réseau (Transport du paquet chiffré)
-        net_bg = COLORS.ORANGE_100 if self.network_is_active else COLORS.BLUE_GREY_100
-        net_border = COLORS.ORANGE_500 if self.network_is_active else COLORS.BLUE_GREY_300
-        net_fg = COLORS.ORANGE_900 if self.network_is_active else COLORS.BLUE_GREY_700
+        # 3. Passerelle réseau sobre
+        net_bg = ACCENT_ORANGE_SOFT if self.network_is_active else BG_CARD
+        net_border = ACCENT_ORANGE if self.network_is_active else BORDER_HAIRLINE
+        net_fg = TEXT_PRIMARY if self.network_is_active else TEXT_SECONDARY
 
         network_bridge = ft.Container(
             bgcolor=net_bg,
-            border=BORDER.all(1.5 if self.network_is_active else 1, net_border),
+            border=BORDER.all(1, net_border),
             border_radius=20,
-            padding=PADDING.symmetric(horizontal=14, vertical=6),
+            padding=PADDING.symmetric(horizontal=14, vertical=5),
             content=ft.Row(
                 alignment=ft.MainAxisAlignment.CENTER,
-                spacing=8,
+                spacing=6,
                 controls=[
-                    ft.Icon(get_icon("WIFI_PROTECTED_SETUP", "ROUTER"), color=net_fg, size=18),
-                    ft.Text(
-                        self.network_status_text,
-                        size=11,
-                        weight=ft.FontWeight.BOLD,
-                        color=net_fg,
+                    ft.Icon(
+                        get_icon("SWAP_VERT", "SYNC_ALT"),
+                        color=ACCENT_ORANGE if self.network_is_active else TEXT_TERTIARY,
+                        size=15,
                     ),
-                    ft.Icon(get_icon("ENHANCED_ENCRYPTION", "LOCK"), color=net_fg, size=16),
+                    ft.Text(self.network_status_text, size=11, weight=ft.FontWeight.W_500, color=net_fg),
                 ],
             ),
         )
 
-        # 4. Zone Destinataire (Étapes 4 -> 5, puis 6 -> 7, puis 8 -> 9)
+        # 4. Zone Destinataire
         receiver_zone = ft.Container(
-            bgcolor=recv_bg,
-            border=BORDER.all(1, recv_border),
-            border_radius=10,
-            padding=8,
+            bgcolor=BG_SUBTLE,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+            border_radius=12,
+            padding=9,
             content=ft.Column(
                 spacing=6,
                 controls=[
                     ft.Row(
                         spacing=6,
                         controls=[
-                            ft.Icon(get_icon("CALL_RECEIVED", "DOWNLOAD"), color=recv_color, size=15),
+                            ft.Container(width=6, height=6, border_radius=3, bgcolor=recv_accent),
                             ft.Text(
-                                f"CÔTÉ DESTINATAIRE ({self.current_receiver.upper()}) — Ratchet DH & Déchiffrement",
+                                f"Destinataire · {self.current_receiver}",
                                 size=11,
-                                weight=ft.FontWeight.BOLD,
-                                color=recv_color,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_SECONDARY,
                             ),
                         ],
                     ),
-                    # Ligne Réception 1 : Lecture en-tête -> Coffre MKSKIPPED
                     ft.Row(
                         spacing=4,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1015,9 +1062,8 @@ class DoubleRatchetApp:
                     ),
                     self._arrow_down(
                         s[6]["status"] == "done",
-                        label="Si nouvelle clé publique DH → Ratchet Asymétrique X25519",
+                        label="Rotation Diffie-Hellman (si nouvelle clé DH)",
                     ),
-                    # Ligne Réception 2 : Ratchet DH #1 -> Ratchet DH #2
                     ft.Row(
                         spacing=4,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1029,9 +1075,8 @@ class DoubleRatchetApp:
                     ),
                     self._arrow_down(
                         s[8]["status"] == "done",
-                        label="Dérivation clé de message MK & déchiffrement",
+                        label="Dérivation clé MK & déchiffrement",
                     ),
-                    # Ligne Réception 3 : KDF Réception -> Déchiffrement
                     ft.Row(
                         spacing=4,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1047,14 +1092,14 @@ class DoubleRatchetApp:
 
         self.schema_container.controls = [
             init_row,
-            self._arrow_down(s[1]["status"] == "done", label="Démarrage d'un message"),
+            self._arrow_down(s[1]["status"] == "done"),
             sender_zone,
             network_bridge,
             receiver_zone,
         ]
 
     # ------------------------------------------------------------------
-    # Gestion des modes et notifications
+    # Contrôle segmenté & notifications
     # ------------------------------------------------------------------
     def _set_mode(self, mode: str):
         self.execution_mode = mode
@@ -1066,18 +1111,22 @@ class DoubleRatchetApp:
 
     def _update_mode_buttons_style(self):
         if self.execution_mode == "instant":
-            self.mode_instant_btn.bgcolor = COLORS.INDIGO_700
-            self.mode_instant_btn.color = COLORS.WHITE
-            self.mode_step_btn.bgcolor = COLORS.BLUE_GREY_100
-            self.mode_step_btn.color = COLORS.BLUE_GREY_900
+            self.seg_instant.bgcolor = BG_CARD
+            self.seg_instant.shadow = self._card_shadow()
+            self.seg_instant.content.color = TEXT_PRIMARY
+            self.seg_step.bgcolor = None
+            self.seg_step.shadow = None
+            self.seg_step.content.color = TEXT_SECONDARY
         else:
-            self.mode_step_btn.bgcolor = COLORS.INDIGO_700
-            self.mode_step_btn.color = COLORS.WHITE
-            self.mode_instant_btn.bgcolor = COLORS.BLUE_GREY_100
-            self.mode_instant_btn.color = COLORS.BLUE_GREY_900
+            self.seg_step.bgcolor = BG_CARD
+            self.seg_step.shadow = self._card_shadow()
+            self.seg_step.content.color = TEXT_PRIMARY
+            self.seg_instant.bgcolor = None
+            self.seg_instant.shadow = None
+            self.seg_instant.content.color = TEXT_SECONDARY
 
     def _notify(self, text: str):
-        snack = ft.SnackBar(ft.Text(text), duration=2500)
+        snack = ft.SnackBar(ft.Text(text), duration=2200)
         if hasattr(self.page, "open"):
             self.page.open(snack)
         else:
@@ -1086,53 +1135,48 @@ class DoubleRatchetApp:
             self.page.update()
 
     # ------------------------------------------------------------------
-    # Bulles de chat (Droite)
+    # Bulles de chat style iMessage
     # ------------------------------------------------------------------
     def _make_system_banner(self, text: str) -> ft.Control:
         return ft.Container(
             alignment=CENTER_ALIGN,
-            content=ft.Container(
-                bgcolor=COLORS.AMBER_50,
-                border=BORDER.all(1, COLORS.AMBER_300),
-                border_radius=8,
-                padding=8,
-                content=ft.Text(text, size=11, color=COLORS.AMBER_900, text_align=ft.TextAlign.CENTER),
-            ),
+            padding=PADDING.symmetric(vertical=4),
+            content=ft.Text(text, size=11, color=TEXT_TERTIARY, text_align=ft.TextAlign.CENTER),
         )
 
     def _add_chat_bubble(self, sender_name: str, receiver_name: str, text: str, status_label: str, is_transit: bool = False):
         is_alice = sender_name == "Alice"
-        bubble_color = COLORS.BLUE_100 if is_alice else COLORS.PURPLE_100
         if is_transit:
-            bubble_color = COLORS.ORANGE_100
-        border_color = COLORS.BLUE_300 if is_alice else COLORS.PURPLE_300
-        if is_transit:
-            border_color = COLORS.ORANGE_400
+            bubble_bg = ACCENT_ORANGE_SOFT
+            text_color = TEXT_PRIMARY
+            sub_color = ACCENT_ORANGE
+        elif is_alice:
+            bubble_bg = ACCENT_BLUE
+            text_color = COLORS.WHITE
+            sub_color = "#D6EAFF"
+        else:
+            bubble_bg = "#E9E9EB"
+            text_color = TEXT_PRIMARY
+            sub_color = TEXT_SECONDARY
 
-        align = ft.MainAxisAlignment.START if is_alice else ft.MainAxisAlignment.END
+        align = ft.MainAxisAlignment.END if is_alice else ft.MainAxisAlignment.START
 
         bubble = ft.Container(
-            width=330,
-            bgcolor=bubble_color,
-            border=BORDER.all(1, border_color),
-            border_radius=12,
-            padding=10,
+            width=300,
+            bgcolor=bubble_bg,
+            border_radius=18,
+            padding=PADDING.symmetric(horizontal=14, vertical=9),
             content=ft.Column(
-                spacing=4,
+                spacing=3,
                 controls=[
+                    ft.Text(text, size=13.5, color=text_color),
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Text(
-                                f"{sender_name} → {receiver_name}",
-                                size=11,
-                                weight=ft.FontWeight.BOLD,
-                                color=COLORS.BLUE_GREY_900,
-                            ),
-                            ft.Text(status_label, size=10, italic=True, color=COLORS.BLUE_GREY_700),
+                            ft.Text(f"{sender_name} → {receiver_name}", size=10, color=sub_color),
+                            ft.Text(status_label, size=10, color=sub_color),
                         ],
                     ),
-                    ft.Text(text, size=13, color=COLORS.BLACK),
                 ],
             ),
         )
@@ -1141,24 +1185,24 @@ class DoubleRatchetApp:
         return bubble
 
     # ------------------------------------------------------------------
-    # Calcul des mises à jour des 10 blocs du schéma
+    # Logique cryptographique Double Ratchet
     # ------------------------------------------------------------------
     def _handle_send(self, sender_name: str, receiver_name: str, delayed: bool = False):
         if self.pending_updates:
-            self._notify("Terminez d'abord les étapes en cours avec 'Étape suivante (+1)' ou 'Finir le message'.")
+            self._notify("Terminez d'abord le message en cours.")
             return
 
         input_field = self.alice_input if sender_name == "Alice" else self.bob_input
         text = (input_field.value or "").strip()
         if not text:
-            text = f"Salut {receiver_name} ! (msg #{(self.alice.Ns if sender_name == 'Alice' else self.bob.Ns) + 1})"
+            text = f"Bonjour {receiver_name} (#{(self.alice.Ns if sender_name == 'Alice' else self.bob.Ns) + 1})"
         input_field.value = ""
 
         sender = self.alice if sender_name == "Alice" else self.bob
         receiver = self.bob if sender_name == "Alice" else self.alice
 
         if sender.CKs is None:
-            self._notify(f"{sender_name} doit d'abord recevoir un message avant de pouvoir répondre !")
+            self._notify(f"{sender_name} doit d'abord recevoir un message.")
             return
 
         self._prepare_nodes_for_new_message(sender_name, receiver_name)
@@ -1170,36 +1214,34 @@ class DoubleRatchetApp:
             bubble_ref = self._add_chat_bubble(
                 sender_name,
                 receiver_name,
-                f"🔒 [En transit chiffré…] ({text})",
-                "En cours d'étape par étape",
+                text,
+                "En cours…",
                 is_transit=True,
             )
-            self.network_status_text = f"Paquet en cours de préparation par {sender_name}…"
+            self.network_status_text = f"Préparation du paquet par {sender_name}…"
             self.network_is_active = True
         elif delayed:
             bubble_ref = self._add_chat_bubble(
                 sender_name,
                 receiver_name,
-                f'⏳ [Paquet retardé sur le réseau] "{text}"',
-                "Hors-ordre (en attente)",
+                text,
+                "Retardé sur le réseau",
                 is_transit=True,
             )
-            self.network_status_text = f"⏳ Paquet de {sender_name} bloqué sur le réseau (hors-ordre)"
+            self.network_status_text = f"Paquet de {sender_name} retenu (hors-ordre)"
             self.network_is_active = True
         else:
             bubble_ref = self._add_chat_bubble(
                 sender_name,
                 receiver_name,
                 text,
-                "Déchiffré E2EE ✓",
+                "Déchiffré",
                 is_transit=False,
             )
-            self.network_status_text = f"Paquet transmis : {sender_name} ➔ {receiver_name} ✓"
+            self.network_status_text = f"Livré · {sender_name} → {receiver_name}"
             self.network_is_active = False
 
-        # ==============================================================
         # ÉTAPE 1 : kdf_ck(CKs)
-        # ==============================================================
         ck_before = sender.CKs
         ns_before = sender.Ns
         pn_before = sender.PN
@@ -1213,47 +1255,43 @@ class DoubleRatchetApp:
                 row_id=1,
                 status="done",
                 actor=sender_name,
-                live_value=f"N={ns_before} | MK={short_hex(mk)}",
+                live_value=f"N={ns_before} · MK {short_hex(mk)}",
                 vulgarisation=(
                     f"{sender_name} dérive la clé unique MK pour le message N={ns_before} et fait avancer sa "
                     f"chaîne d'envoi CKs via HMAC-SHA256."
                 ),
-                inputs_detail=f"• CKs avant : {full_hex(ck_before)}\n• Compteur Ns : {ns_before}",
-                outputs_detail=f"• Nouvelle CKs : {full_hex(ck_after)}\n• Clé Message MK : {full_hex(mk)}",
+                inputs_detail=f"CKs : {full_hex(ck_before)}\nNs  : {ns_before}",
+                outputs_detail=f"CKs' : {full_hex(ck_after)}\nMK   : {full_hex(mk)}",
             )
         )
 
-        # ==============================================================
         # ÉTAPE 2 : encode_header
-        # ==============================================================
         header_bytes = encode_header(dhs_pub, pn_before, ns_before)
         updates.append(
             StepUpdate(
                 row_id=2,
                 status="done",
                 actor=sender_name,
-                live_value=f"DHs={short_hex(dhs_pub)} | PN={pn_before}, N={ns_before}",
+                live_value=f"DH {short_hex(dhs_pub)} · PN={pn_before}, N={ns_before}",
                 vulgarisation=(
                     f"{sender_name} assemble l'en-tête de 40 octets : sa clé publique DH actuelle, "
                     f"PN={pn_before} et N={ns_before}."
                 ),
-                inputs_detail=f"• DHs pub : {full_hex(dhs_pub)}\n• PN={pn_before}, N={ns_before}",
-                outputs_detail=f"• Header (40B) : {full_hex(header_bytes)}",
+                inputs_detail=f"DHs_pub : {full_hex(dhs_pub)}\nPN={pn_before}, N={ns_before}",
+                outputs_detail=f"Header (40 o) : {full_hex(header_bytes)}",
             )
         )
 
-        # ==============================================================
         # ÉTAPE 3 : encrypt_symmetric
-        # ==============================================================
         ciphertext = encrypt_symmetric(mk, plaintext_bytes, AD + header_bytes)
         sender.Ns += 1
 
         def on_sent_done(s_name=sender_name, r_name=receiver_name, is_del=delayed, size=len(ciphertext)):
             if is_del:
-                self.network_status_text = f"⏳ Paquet ({size}B) retenu sur le réseau ({s_name} ⏸ {r_name})"
+                self.network_status_text = f"Paquet ({size} o) en attente réseau · {s_name} → {r_name}"
                 self.network_is_active = True
             else:
-                self.network_status_text = f"📡 Paquet chiffré ({size}B) en transit : {s_name} ➔ {r_name}"
+                self.network_status_text = f"Paquet chiffré ({size} o) en transit · {s_name} → {r_name}"
                 self.network_is_active = True
 
         updates.append(
@@ -1261,16 +1299,15 @@ class DoubleRatchetApp:
                 row_id=3,
                 status="done",
                 actor=sender_name,
-                live_value=f"Paquet={len(ciphertext)}B | HMAC={short_hex(ciphertext[-32:])}",
+                live_value=f"{len(ciphertext)} o · HMAC {short_hex(ciphertext[-32:])}",
                 vulgarisation=(
-                    f"{sender_name} chiffre le texte \"{text}\" avec MK et ajoute une signature HMAC-SHA256 "
-                    f"de 32 octets."
+                    f"{sender_name} chiffre le message \"{text}\" avec MK et ajoute une signature HMAC-SHA256."
                 ),
-                inputs_detail=f'• Texte clair : "{text}"\n• Clé MK : {full_hex(mk)}',
+                inputs_detail=f'Clair : "{text}"\nMK    : {full_hex(mk)}',
                 outputs_detail=(
-                    f"• Nonce (12B) : {full_hex(ciphertext[:12])}\n"
-                    f"• Chiffré     : {full_hex(ciphertext[12:-32])}\n"
-                    f"• Tag HMAC    : {full_hex(ciphertext[-32:])}"
+                    f"Nonce : {full_hex(ciphertext[:12])}\n"
+                    f"Data  : {full_hex(ciphertext[12:-32])}\n"
+                    f"HMAC  : {full_hex(ciphertext[-32:])}"
                 ),
                 on_reveal=on_sent_done,
             )
@@ -1294,7 +1331,7 @@ class DoubleRatchetApp:
                         row_id=rid,
                         status="skipped",
                         actor=receiver_name,
-                        live_value="En attente sur réseau",
+                        live_value="En attente réseau",
                         vulgarisation="Le paquet n'est pas encore arrivé chez le destinataire.",
                         inputs_detail="En attente sur le réseau.",
                         outputs_detail="En attente sur le réseau.",
@@ -1317,7 +1354,7 @@ class DoubleRatchetApp:
             self.active_row_id = None
             self.selected_row_id = 9 if not delayed else 3
             if not delayed:
-                self.network_status_text = f"Paquet livré & déchiffré : {sender_name} ➔ {receiver_name} ✓"
+                self.network_status_text = f"Livré & déchiffré · {sender_name} → {receiver_name}"
                 self.network_is_active = False
         else:
             self.pending_updates.extend(updates)
@@ -1335,9 +1372,7 @@ class DoubleRatchetApp:
         bubble_ref: ft.Container,
         updates: list[StepUpdate],
     ):
-        # ==============================================================
         # ÉTAPE 4 : decode_header
-        # ==============================================================
         dh_pub, pn, n = decode_header(header_bytes)
         dh_changed = dh_pub != receiver.DHr
 
@@ -1346,17 +1381,17 @@ class DoubleRatchetApp:
                 row_id=4,
                 status="done",
                 actor=receiver_name,
-                live_value=f"N={n} | {'🔄 Nouvelle DH' if dh_changed else '✔ Même DH'}",
+                live_value=f"N={n} · {'Nouvelle DH' if dh_changed else 'Même DH'}",
                 vulgarisation=(
-                    f"{receiver_name} décode l'en-tête. "
+                    f"{receiver_name} lit l'en-tête. "
                     + (
-                        f"La clé publique DH de {sender_name} a changé : Ratchet DH déclenché (étapes 6 et 7) !"
+                        f"La clé publique DH de {sender_name} a changé : Ratchet DH requis."
                         if dh_changed
-                        else f"La clé publique DH est identique à la précédente : étapes 6-7 non requises."
+                        else "La clé publique DH est inchangée : pas de rotation asymétrique."
                     )
                 ),
-                inputs_detail=f"• Header reçu : {full_hex(header_bytes)}",
-                outputs_detail=f"• DH_pub : {full_hex(dh_pub)}\n• PN={pn}, N={n} | Changement DH = {dh_changed}",
+                inputs_detail=f"Header : {full_hex(header_bytes)}",
+                outputs_detail=f"DH_pub : {full_hex(dh_pub)}\nPN={pn}, N={n} · Changement DH = {dh_changed}",
             )
         )
 
@@ -1370,12 +1405,12 @@ class DoubleRatchetApp:
                     row_id=5,
                     status="done",
                     actor=receiver_name,
-                    live_value=f"📦 MK trouvée (N={n})",
+                    live_value=f"MK extraite (N={n})",
                     vulgarisation=(
                         f"{receiver_name} retrouve la clé MK pré-calculée pour ce message retardataire dans MKSKIPPED."
                     ),
-                    inputs_detail=f"• Clé recherchée : (DH={short_hex(dh_pub)}, N={n})",
-                    outputs_detail=f"• MK récupérée : {full_hex(mk_saved)}\n• Reste dans MKSKIPPED : {len(receiver.MKSKIPPED)}",
+                    inputs_detail=f"Clé : (DH={short_hex(dh_pub)}, N={n})",
+                    outputs_detail=f"MK : {full_hex(mk_saved)}\nRestant dans coffre : {len(receiver.MKSKIPPED)}",
                 )
             )
             for rid in (6, 7, 8):
@@ -1384,19 +1419,22 @@ class DoubleRatchetApp:
                         row_id=rid,
                         status="skipped",
                         actor=receiver_name,
-                        live_value="Clé déjà dans coffre",
-                        vulgarisation="Inutile de recalculer les chaînes : la clé MK était déjà archivée.",
+                        live_value="Clé déjà archivée",
+                        vulgarisation="Inutile de recalculer les chaînes : la clé MK était déjà dans MKSKIPPED.",
                         inputs_detail="—",
                         outputs_detail="—",
                     )
                 )
 
-            def reveal_delayed(b=bubble_ref, pt=plaintext_out, s_name=sender_name, r_name=receiver_name):
-                b.bgcolor = COLORS.GREEN_100
-                b.border = BORDER.all(1, COLORS.GREEN_400)
-                b.content.controls[0].controls[1].value = "Déchiffré via MKSKIPPED ✓"
-                b.content.controls[1].value = pt
-                self.network_status_text = f"Paquet retardé livré & déchiffré : {s_name} ➔ {r_name} ✓"
+            def reveal_delayed(b=bubble_ref, pt=plaintext_out, is_alice=(sender_name == "Alice"), s_name=sender_name, r_name=receiver_name):
+                b.bgcolor = ACCENT_BLUE if is_alice else "#E9E9EB"
+                b.content.controls[0].color = COLORS.WHITE if is_alice else TEXT_PRIMARY
+                sub_c = "#D6EAFF" if is_alice else TEXT_SECONDARY
+                b.content.controls[1].controls[0].color = sub_c
+                b.content.controls[1].controls[1].color = sub_c
+                b.content.controls[1].controls[1].value = "Déchiffré (MKSKIPPED)"
+                b.content.controls[0].value = pt
+                self.network_status_text = f"Livré (hors-ordre) · {s_name} → {r_name}"
                 self.network_is_active = False
 
             updates.append(
@@ -1404,18 +1442,16 @@ class DoubleRatchetApp:
                     row_id=9,
                     status="done",
                     actor=receiver_name,
-                    live_value=f'HMAC ✓ → "{plaintext_out}"',
-                    vulgarisation=f"Signature HMAC validée et texte déchiffré : \"{plaintext_out}\".",
-                    inputs_detail=f"• MK : {full_hex(mk_saved)}",
-                    outputs_detail=f'• Texte déchiffré : "{plaintext_out}"',
+                    live_value=f'"{plaintext_out}"',
+                    vulgarisation=f"Signature HMAC validée et message déchiffré : \"{plaintext_out}\".",
+                    inputs_detail=f"MK : {full_hex(mk_saved)}",
+                    outputs_detail=f'Clair : "{plaintext_out}"',
                     on_reveal=reveal_delayed,
                 )
             )
             return
 
-        # ==============================================================
         # ÉTAPE 5 : skip_message_keys
-        # ==============================================================
         skipped_something = False
         skip_summary_parts = []
         skip_in_parts = []
@@ -1426,12 +1462,10 @@ class DoubleRatchetApp:
             receiver.skip_message_keys(pn)
             skipped_something = True
             skip_summary_parts.append(f"N={nr_start}..{pn - 1}")
-            skip_in_parts.append(f"• Ancienne chaîne : Nr={nr_start} < PN={pn}")
-            skip_out_parts.append(f"• Archivé N={nr_start}..{pn - 1} dans MKSKIPPED (total={len(receiver.MKSKIPPED)})")
+            skip_in_parts.append(f"Ancienne chaîne : Nr={nr_start} < PN={pn}")
+            skip_out_parts.append(f"Archivé N={nr_start}..{pn - 1} (coffre={len(receiver.MKSKIPPED)})")
 
-        # ==============================================================
-        # ÉTAPES 6 & 7 : Ratchet DH (si dh_changed)
-        # ==============================================================
+        # ÉTAPES 6 & 7 : Ratchet DH
         if dh_changed:
             rk_before = receiver.RK
             old_dhs_priv, old_dhs_pub = receiver.DHs
@@ -1451,13 +1485,13 @@ class DoubleRatchetApp:
                     row_id=6,
                     status="done",
                     actor=receiver_name,
-                    live_value=f"RK→{short_hex(rk_mid)} | CKr={short_hex(ckr_new)}",
+                    live_value=f"CKr {short_hex(ckr_new)}",
                     vulgarisation=(
                         f"{receiver_name} calcule X25519 entre sa clé privée actuelle et la nouvelle clé publique de "
-                        f"{sender_name}, puis dérive la nouvelle chaîne de réception CKr."
+                        f"{sender_name}, puis dérive la chaîne de réception CKr."
                     ),
-                    inputs_detail=f"• RK avant : {full_hex(rk_before)}\n• DH_pub reçue : {full_hex(dh_pub)}",
-                    outputs_detail=f"• Secret X25519 #1 : {full_hex(dh_out_1)}\n• RK mid : {full_hex(rk_mid)}\n• Nouvelle CKr : {full_hex(ckr_new)}",
+                    inputs_detail=f"RK     : {full_hex(rk_before)}\nDH_pub : {full_hex(dh_pub)}",
+                    outputs_detail=f"X25519 : {full_hex(dh_out_1)}\nRK'    : {full_hex(rk_mid)}\nCKr    : {full_hex(ckr_new)}",
                 )
             )
 
@@ -1472,13 +1506,13 @@ class DoubleRatchetApp:
                     row_id=7,
                     status="done",
                     actor=receiver_name,
-                    live_value=f"DHs'={short_hex(receiver.DHs[1])} | CKs={short_hex(cks_new)}",
+                    live_value=f"DHs' {short_hex(receiver.DHs[1])}",
                     vulgarisation=(
                         f"{receiver_name} génère une nouvelle paire X25519 locale et re-mélange RK pour préparer "
                         f"sa future chaîne d'envoi CKs."
                     ),
-                    inputs_detail=f"• RK mid : {full_hex(rk_mid)}\n• Ancienne DHs pub : {full_hex(old_dhs_pub)}",
-                    outputs_detail=f"• Nouvelle DHs pub : {full_hex(receiver.DHs[1])}\n• Nouvelle RK : {full_hex(rk_after)}\n• Nouvelle CKs : {full_hex(cks_new)}",
+                    inputs_detail=f"RK'         : {full_hex(rk_mid)}\nAncienne DH : {full_hex(old_dhs_pub)}",
+                    outputs_detail=f"Nouvelle DH : {full_hex(receiver.DHs[1])}\nRK''        : {full_hex(rk_after)}\nCKs         : {full_hex(cks_new)}",
                 )
             )
         else:
@@ -1487,10 +1521,10 @@ class DoubleRatchetApp:
                     row_id=6,
                     status="skipped",
                     actor=receiver_name,
-                    live_value="Même clé DH",
-                    vulgarisation="Comme l'expéditeur n'a pas changé de clé DH, on conserve la chaîne de réception CKr.",
-                    inputs_detail="DH_pub reçue == DHr actuelle",
-                    outputs_detail=f"CKr inchangée : {full_hex(receiver.CKr)}",
+                    live_value="Non requis",
+                    vulgarisation="Clé DH identique : conservation de la chaîne CKr actuelle.",
+                    inputs_detail="DH_pub == DHr",
+                    outputs_detail=f"CKr : {full_hex(receiver.CKr)}",
                 )
             )
             updates.append(
@@ -1498,10 +1532,10 @@ class DoubleRatchetApp:
                     row_id=7,
                     status="skipped",
                     actor=receiver_name,
-                    live_value="Pas de rotation DH",
-                    vulgarisation="Pas de changement de tour de parole : pas de nouvelle paire DH générée.",
-                    inputs_detail="DH_pub reçue == DHr actuelle",
-                    outputs_detail=f"RK inchangée : {full_hex(receiver.RK)}",
+                    live_value="Non requis",
+                    vulgarisation="Pas de changement de tour de parole.",
+                    inputs_detail="DH_pub == DHr",
+                    outputs_detail=f"RK : {full_hex(receiver.RK)}",
                 )
             )
 
@@ -1510,31 +1544,29 @@ class DoubleRatchetApp:
             receiver.skip_message_keys(n)
             skipped_something = True
             skip_summary_parts.append(f"N={nr_before_skip}..{n - 1}")
-            skip_in_parts.append(f"• Chaîne courante : Nr={nr_before_skip} < N={n}")
-            skip_out_parts.append(f"• Archivé N={nr_before_skip}..{n - 1} dans MKSKIPPED (total={len(receiver.MKSKIPPED)})")
+            skip_in_parts.append(f"Chaîne courante : Nr={nr_before_skip} < N={n}")
+            skip_out_parts.append(f"Archivé N={nr_before_skip}..{n - 1} (coffre={len(receiver.MKSKIPPED)})")
 
         step5_update = StepUpdate(
             row_id=5,
             status="done" if skipped_something else "skipped",
             actor=receiver_name,
             live_value=(
-                f"Archivé {', '.join(skip_summary_parts)} ({len(receiver.MKSKIPPED)})"
+                f"Archivé {', '.join(skip_summary_parts)}"
                 if skipped_something
-                else f"0 saut (Nr={n}==N={n})"
+                else f"Aucun saut (N={n})"
             ),
             vulgarisation=(
-                "Des messages manquent à l'appel : leurs clés sont pré-calculées et sauvegardées dans MKSKIPPED."
+                "Des messages manquent à l'appel : leurs clés sont sauvegardées dans MKSKIPPED."
                 if skipped_something
-                else "Le numéro du message reçu correspond exactement au compteur attendu : aucun saut nécessaire."
+                else "Le numéro de message correspond au compteur attendu."
             ),
-            inputs_detail="\n".join(skip_in_parts) if skipped_something else f"• Compteur attendu Nr = {n}",
-            outputs_detail="\n".join(skip_out_parts) if skipped_something else f"• Taille MKSKIPPED = {len(receiver.MKSKIPPED)}",
+            inputs_detail="\n".join(skip_in_parts) if skipped_something else f"Nr attendu = {n}",
+            outputs_detail="\n".join(skip_out_parts) if skipped_something else f"Coffre MKSKIPPED = {len(receiver.MKSKIPPED)}",
         )
         updates.insert(4, step5_update)
 
-        # ==============================================================
         # ÉTAPE 8 : kdf_ck(CKr)
-        # ==============================================================
         ckr_before = receiver.CKr
         nr_curr = receiver.Nr
         ckr_after, mk_recv = kdf_ck(ckr_before)
@@ -1546,27 +1578,28 @@ class DoubleRatchetApp:
                 row_id=8,
                 status="done",
                 actor=receiver_name,
-                live_value=f"N={nr_curr} | MK={short_hex(mk_recv)}",
+                live_value=f"N={nr_curr} · MK {short_hex(mk_recv)}",
                 vulgarisation=(
-                    f"{receiver_name} fait avancer sa chaîne de réception CKr et retrouve la même clé MK "
-                    f"que celle utilisée par {sender_name} à l'étape 1."
+                    f"{receiver_name} fait avancer sa chaîne de réception CKr et retrouve la clé MK "
+                    f"identique à celle utilisée par {sender_name}."
                 ),
-                inputs_detail=f"• CKr avant : {full_hex(ckr_before)}\n• Compteur Nr : {nr_curr}",
-                outputs_detail=f"• Nouvelle CKr : {full_hex(ckr_after)}\n• Clé MK retrouvée : {full_hex(mk_recv)}",
+                inputs_detail=f"CKr : {full_hex(ckr_before)}\nNr  : {nr_curr}",
+                outputs_detail=f"CKr' : {full_hex(ckr_after)}\nMK   : {full_hex(mk_recv)}",
             )
         )
 
-        # ==============================================================
         # ÉTAPE 9 : decrypt_symmetric
-        # ==============================================================
         plaintext_out = decrypt_symmetric(mk_recv, ciphertext, AD + header_bytes).decode("utf-8")
 
         def reveal_decrypted(b=bubble_ref, pt=plaintext_out, is_alice=(sender_name == "Alice"), s_name=sender_name, r_name=receiver_name):
-            b.bgcolor = COLORS.BLUE_100 if is_alice else COLORS.PURPLE_100
-            b.border = BORDER.all(1, COLORS.BLUE_300 if is_alice else COLORS.PURPLE_300)
-            b.content.controls[0].controls[1].value = "Déchiffré E2EE ✓"
-            b.content.controls[1].value = pt
-            self.network_status_text = f"Paquet livré & déchiffré : {s_name} ➔ {r_name} ✓"
+            b.bgcolor = ACCENT_BLUE if is_alice else "#E9E9EB"
+            b.content.controls[0].color = COLORS.WHITE if is_alice else TEXT_PRIMARY
+            sub_c = "#D6EAFF" if is_alice else TEXT_SECONDARY
+            b.content.controls[1].controls[0].color = sub_c
+            b.content.controls[1].controls[1].color = sub_c
+            b.content.controls[1].controls[1].value = "Déchiffré"
+            b.content.controls[0].value = pt
+            self.network_status_text = f"Livré & déchiffré · {s_name} → {r_name}"
             self.network_is_active = False
 
         updates.append(
@@ -1574,18 +1607,18 @@ class DoubleRatchetApp:
                 row_id=9,
                 status="done",
                 actor=receiver_name,
-                live_value=f'HMAC ✓ → "{plaintext_out}"',
+                live_value=f'"{plaintext_out}"',
                 vulgarisation=(
                     f"{receiver_name} valide le tag HMAC-SHA256 et déchiffre le message : \"{plaintext_out}\"."
                 ),
-                inputs_detail=f"• Paquet ({len(ciphertext)}B) : {short_hex(ciphertext, 10, 10)}\n• Clé MK : {full_hex(mk_recv)}",
-                outputs_detail=f'• Signature HMAC : VALIDE ✓\n• Texte en clair : "{plaintext_out}"',
+                inputs_detail=f"Paquet ({len(ciphertext)} o) : {short_hex(ciphertext, 10, 10)}\nMK : {full_hex(mk_recv)}",
+                outputs_detail=f'HMAC  : Valide\nClair : "{plaintext_out}"',
                 on_reveal=reveal_decrypted,
             )
         )
 
     # ------------------------------------------------------------------
-    # Exécution incrémentale sur le schéma visuel
+    # Exécution incrémentale
     # ------------------------------------------------------------------
     def _apply_one_update(self, up: StepUpdate):
         if up.on_reveal:
@@ -1622,14 +1655,14 @@ class DoubleRatchetApp:
 
     def _on_deliver_delayed_click(self, _):
         if self.pending_updates:
-            self._notify("Terminez d'abord les étapes en cours avant de livrer le message retardé.")
+            self._notify("Terminez d'abord le message en cours.")
             return
         if not self.delayed_packets:
             return
 
         pkt = self.delayed_packets.pop(0)
         self._prepare_nodes_for_new_message(pkt["sender_name"], pkt["receiver_name"])
-        self.network_status_text = f"📡 Livraison du paquet retardé : {pkt['sender_name']} ➔ {pkt['receiver_name']}"
+        self.network_status_text = f"Livraison retardée · {pkt['sender_name']} → {pkt['receiver_name']}"
         self.network_is_active = True
 
         updates: list[StepUpdate] = []
@@ -1639,7 +1672,7 @@ class DoubleRatchetApp:
                     row_id=rid,
                     status="skipped",
                     actor=pkt["sender_name"],
-                    live_value="Déjà émis précédemment",
+                    live_value="Déjà émis",
                     vulgarisation="Les étapes d'envoi ont déjà été exécutées lors de l'émission du paquet.",
                     inputs_detail="Déjà exécuté.",
                     outputs_detail="Déjà exécuté.",
@@ -1670,7 +1703,7 @@ class DoubleRatchetApp:
         self._refresh_all_ui()
 
     # ------------------------------------------------------------------
-    # Sélection d'un bloc et mise à jour de l'interface
+    # Rafraîchissement global de l'interface
     # ------------------------------------------------------------------
     def _select_row(self, row_id: int):
         self.selected_row_id = row_id
@@ -1682,7 +1715,8 @@ class DoubleRatchetApp:
         st = self.row_states.get(self.selected_row_id)
         if not st:
             return
-        self.detail_title.value = f"{st['title']} ({st['actor']}) — {st['func']}"
+        self.detail_title.value = f"{st['title']} · {st['actor']}"
+        self.detail_func.value = st["func"]
         self.detail_vulgarisation.value = st["vulgarisation"]
         self.detail_inputs.value = st["inputs_detail"]
         self.detail_outputs.value = st["outputs_detail"]
@@ -1692,30 +1726,28 @@ class DoubleRatchetApp:
         self.next_step_btn.disabled = pending_count == 0
         set_btn_label(
             self.next_step_btn,
-            f"Étape suivante (+1) [{pending_count} restante{'s' if pending_count > 1 else ''}]"
-            if pending_count > 0
-            else "Étape suivante (+1)",
+            f"Étape suivante ({pending_count})" if pending_count > 0 else "Étape suivante",
         )
         self.finish_all_btn.disabled = pending_count == 0
 
         delayed_count = len(self.delayed_packets)
         self.deliver_delayed_btn.disabled = delayed_count == 0 or pending_count > 0
-        set_btn_label(self.deliver_delayed_btn, f"Livrer msg retardé ({delayed_count})")
+        set_btn_label(self.deliver_delayed_btn, f"Livrer retardé ({delayed_count})")
 
         if pending_count > 0:
-            self.status_pill.content.value = f"En cours : {pending_count} étape(s) restante(s)"
-            self.status_pill.bgcolor = COLORS.ORANGE_700
+            self.status_dot.bgcolor = ACCENT_ORANGE
+            self.status_label.value = f"{pending_count} étape(s) restante(s)"
         else:
-            self.status_pill.content.value = "Synchronisé ✓"
-            self.status_pill.bgcolor = COLORS.GREEN_700
+            self.status_dot.bgcolor = ACCENT_GREEN
+            self.status_label.value = "Synchronisé"
 
         self.alice_state_text.value = (
-            f"RK={short_hex(self.alice.RK)} | Ns={self.alice.Ns} Nr={self.alice.Nr} PN={self.alice.PN}\n"
-            f"CKs={short_hex(self.alice.CKs)} | CKr={short_hex(self.alice.CKr)} | Skip={len(self.alice.MKSKIPPED)}"
+            f"RK {short_hex(self.alice.RK)} · Ns={self.alice.Ns} Nr={self.alice.Nr} PN={self.alice.PN}\n"
+            f"CKs {short_hex(self.alice.CKs)} · CKr {short_hex(self.alice.CKr)} · Skip={len(self.alice.MKSKIPPED)}"
         )
         self.bob_state_text.value = (
-            f"RK={short_hex(self.bob.RK)} | Ns={self.bob.Ns} Nr={self.bob.Nr} PN={self.bob.PN}\n"
-            f"CKs={short_hex(self.bob.CKs)} | CKr={short_hex(self.bob.CKr)} | Skip={len(self.bob.MKSKIPPED)}"
+            f"RK {short_hex(self.bob.RK)} · Ns={self.bob.Ns} Nr={self.bob.Nr} PN={self.bob.PN}\n"
+            f"CKs {short_hex(self.bob.CKs)} · CKr {short_hex(self.bob.CKr)} · Skip={len(self.bob.MKSKIPPED)}"
         )
 
         self._rebuild_visual_schema()

@@ -2,7 +2,7 @@ import hmac
 import hashlib
 import secrets
 import struct
-from 1_hkdf import hkdf_expand
+from hkdf import hkdf_expand
 
 #fonction xor utile pour les calcul des éléments chiffrés
 def xor_bytes(b1: bytes, b2: bytes) -> bytes:

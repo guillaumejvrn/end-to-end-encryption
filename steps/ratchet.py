@@ -1,7 +1,7 @@
-from header import decode_header
+from header import decode_header, encode_header
 import hkdf
 from KDFRatchets import kdf_ck, kdf_rk
-import stream_cipher_authentication
+from stream_cipher_authentication import encrypt_symmetric, decrypt_symmetric
 import X25519
 
 class RatchetState :

@@ -28,4 +28,5 @@ def hkdf(salt: bytes, ikm: bytes, info: bytes, length: int) -> bytes:
     return hkdf_expand(prk, info, length)
 
 
-print(hkdf_extract(bytes.fromhex("000102030405060708090a0b0c"),	bytes.fromhex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")   ))
+if __name__ == "__main__":
+	print(hkdf_extract(bytes.fromhex("000102030405060708090a0b0c"),	bytes.fromhex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")   ))

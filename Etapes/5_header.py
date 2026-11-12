@@ -1,6 +1,7 @@
 import struct
 maxi = 4294967295
 mini = 0
+
 def encode_header(dh_pub : bytes, pn : int, n : int) -> bytes:
     if (isinstance(dh_pub, bytes)) and (len(dh_pub) == 32):
         if (not isinstance(pn, bool) and isinstance(pn, int) and pn >= mini and pn <= maxi):

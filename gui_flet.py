@@ -2,8 +2,8 @@
 """
 Interface Graphique Pédagogique (Flet) pour l'algorithme Double Ratchet.
 Design épuré inspiré d'Apple (macOS / iMessage) :
-- Gauche : Schéma visuel interactif en temps réel (cartes minimalistes, lignes fines, palette système).
-- Droite : Messagerie style iMessage entre Alice et Bob.
+- Gauche : Schéma visuel interactif en temps réel + Inspecteur technique.
+- Droite : Messagerie style iMessage & Laboratoire Sécurité (Forward Secrecy & Post-Compromise Security).
 - Haut   : Barre d'outils sobre avec contrôle segmenté (Instantané / Pas à pas).
 """
 
@@ -43,6 +43,8 @@ ACCENT_GREEN = "#34C759"
 ACCENT_GREEN_SOFT = "#EAFBF0"
 ACCENT_ORANGE = "#FF9500"
 ACCENT_ORANGE_SOFT = "#FFF6E6"
+ACCENT_RED = "#FF3B30"
+ACCENT_RED_SOFT = "#FFECEB"
 
 AD = b"DoubleRatchetGUI-v2"
 
@@ -233,12 +235,128 @@ class StepUpdate:
         self.on_reveal = on_reveal
 
 
+class AttackerSimulator:
+    """
+    Simule un attaquant passif qui vole l'état interne d'un participant à l'instant t
+    et tente de déchiffrer :
+      1. Les paquets interceptés AVANT t (test de Forward Secrecy).
+      2. Les paquets interceptés APRÈS t (test de Post-Compromise Security).
+    """
+
+    def __init__(self, victim_name: str, victim_state: RatchetState, compromise_msg_index: int):
+        self.victim_name = victim_name
+        self.compromise_msg_index = compromise_msg_index
+
+        # Copie des clés volées à l'instant t
+        self.stolen_RK = victim_state.RK
+        self.stolen_CKs = victim_state.CKs
+        self.stolen_CKr = victim_state.CKr
+        self.stolen_DHs = victim_state.DHs  # (priv, pub)
+        self.stolen_DHr = victim_state.DHr
+
+        # Clone d'état que l'attaquant fait avancer après t
+        self.clone_RK = victim_state.RK
+        self.clone_CKs = victim_state.CKs
+        self.clone_CKr = victim_state.CKr
+        self.clone_DHs = victim_state.DHs
+        self.clone_DHr = victim_state.DHr
+        self.healed = False
+
+    def attack_past_packet(self, pkt: dict) -> tuple[bool, str]:
+        """
+        Tente de déchiffrer un paquet envoyé AVANT t avec les clés volées à t.
+        Échoue systématiquement car HMAC-SHA256 (kdf_ck / kdf_rk) est à sens unique
+        et les clés MK passées ont été effacées.
+        """
+        candidate_keys = [
+            k for k in (self.stolen_CKs, self.stolen_CKr, self.stolen_RK) if k is not None
+        ]
+        # L'attaquant teste aussi plusieurs dérivations en avant depuis ses clés volées
+        expanded_candidates = list(candidate_keys)
+        for base in candidate_keys:
+            ck = base
+            for _ in range(4):
+                ck, mk = kdf_ck(ck)
+                expanded_candidates.append(mk)
+
+        for key in expanded_candidates:
+            try:
+                pt = decrypt_symmetric(key, pkt["ciphertext"], AD + pkt["header"]).decode("utf-8")
+                return True, pt
+            except Exception:
+                continue
+
+        return False, "Échec HMAC · KDF à sens unique (clé passée irrécupérable)"
+
+    def attack_future_packet(self, pkt: dict) -> tuple[bool, str]:
+        """
+        Tente de déchiffrer un paquet envoyé APRÈS t en suivant la chaîne symétrique
+        ou en essayant de suivre un DH Ratchet.
+        """
+        dh_pub, _pn, _n = decode_header(pkt["header"])
+        is_victim_sender = pkt["sender"] == self.victim_name
+
+        if is_victim_sender:
+            # La victime envoie un message
+            if dh_pub != self.clone_DHs[1]:
+                # La victime a généré une nouvelle paire X25519 lors d'un DH Ratchet :
+                # l'attaquant ne possède pas la nouvelle clé privée DHs_priv !
+                self.healed = True
+                return False, "Bloqué · Nouvelle clé privée DHs inconnue (PCS)"
+
+            if self.clone_CKs is None:
+                self.healed = True
+                return False, "Bloqué · Chaîne CKs désynchronisée"
+
+            self.clone_CKs, mk_guess = kdf_ck(self.clone_CKs)
+            try:
+                pt = decrypt_symmetric(mk_guess, pkt["ciphertext"], AD + pkt["header"]).decode("utf-8")
+                return True, f'Lu en clair : "{pt}"'
+            except Exception:
+                self.healed = True
+                return False, "Échec HMAC · Chaîne désynchronisée"
+        else:
+            # L'autre participant envoie un message à la victime
+            if dh_pub != self.clone_DHr:
+                # L'interlocuteur a fait tourner sa clé DH !
+                # L'attaquant peut encore calculer le 1er pas DH s'il a encore l'ancienne DHs_priv de la victime,
+                # mais dès que la victime génère sa nouvelle DHs au tour suivant, l'attaquant perd définitivement le fil.
+                if not self.healed and self.clone_DHs is not None:
+                    try:
+                        dh_out = x25519(self.clone_DHs[0], dh_pub)
+                        self.clone_RK, self.clone_CKr = kdf_rk(self.clone_RK, dh_out)
+                        self.clone_DHr = dh_pub
+                        # L'attaquant ne peut pas deviner la future paire generate_keypair() de la victime
+                        self.clone_DHs = None
+                        self.healed = True
+                    except Exception:
+                        self.healed = True
+                        return False, "Bloqué · Désynchronisation DH"
+                else:
+                    self.healed = True
+                    return False, "Bloqué · Nouvel échange DH X25519 (PCS)"
+
+            if self.clone_CKr is None:
+                self.healed = True
+                return False, "Bloqué · Chaîne CKr inconnue"
+
+            self.clone_CKr, mk_guess = kdf_ck(self.clone_CKr)
+            try:
+                pt = decrypt_symmetric(mk_guess, pkt["ciphertext"], AD + pkt["header"]).decode("utf-8")
+                if self.healed:
+                    return True, f'Dernier paquet avant rotation : "{pt}" (guérison amorcée)'
+                return True, f'Lu en clair : "{pt}"'
+            except Exception:
+                self.healed = True
+                return False, "Échec HMAC · Sécurité restaurée"
+
+
 class DoubleRatchetApp:
     def __init__(self, page: ft.Page):
         self.page = page
         self.page.title = "Double Ratchet — Démonstrateur E2EE"
-        self.page.window.width = 1440
-        self.page.window.height = 900
+        self.page.window.width = 1460
+        self.page.window.height = 920
         self.page.padding = 16
         self.page.theme_mode = ft.ThemeMode.LIGHT
         self.page.bgcolor = BG_WINDOW
@@ -254,11 +372,17 @@ class DoubleRatchetApp:
         self.selected_row_id: int = 0
         self.active_row_id: int | None = None
 
-        # État du canal réseau
+        # État du canal réseau & capture pour l'audit sécurité
         self.network_status_text: str = "Canal prêt — En attente d'un message"
         self.network_is_active: bool = False
         self.current_sender: str = "Alice"
         self.current_receiver: str = "Bob"
+        self.captured_packets: list[dict] = []
+
+        # État du simulateur d'attaque (Forward Secrecy & Post-Compromise Security)
+        self.attacker: AttackerSimulator | None = None
+        self.audit_results: list[dict] = []
+        self.right_tab: str = "chat"  # "chat" | "security"
 
         # File d'étapes en attente pour le mode pas à pas
         self.pending_updates: list[StepUpdate] = []
@@ -317,6 +441,9 @@ class DoubleRatchetApp:
 
         self.pending_updates.clear()
         self.delayed_packets.clear()
+        self.captured_packets.clear()
+        self.attacker = None
+        self.audit_results.clear()
         self._init_fixed_nodes()
 
         self.current_sender = "Alice"
@@ -664,7 +791,37 @@ class DoubleRatchetApp:
             ),
         )
 
-        # --- PANNEAU DROIT : Style iMessage ---
+        # --- PANNEAU DROIT : Onglets segmentés (Messages | Audit Sécurité) ---
+        self.tab_chat_btn = ft.Container(
+            content=ft.Text("Messages", size=12, weight=ft.FontWeight.W_600),
+            padding=PADDING.symmetric(horizontal=12, vertical=5),
+            border_radius=7,
+            on_click=lambda _: self._set_right_tab("chat"),
+        )
+        self.tab_sec_btn = ft.Container(
+            content=ft.Row(
+                spacing=5,
+                controls=[
+                    ft.Icon(get_icon("SHIELD_OUTLINED", "SECURITY"), size=14, color=TEXT_SECONDARY),
+                    ft.Text("Audit Sécurité", size=12, weight=ft.FontWeight.W_600),
+                ],
+            ),
+            padding=PADDING.symmetric(horizontal=12, vertical=5),
+            border_radius=7,
+            on_click=lambda _: self._set_right_tab("security"),
+        )
+        right_tabs = ft.Container(
+            bgcolor=BG_SUBTLE,
+            padding=2,
+            border_radius=9,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+            content=ft.Row(spacing=2, controls=[self.tab_chat_btn, self.tab_sec_btn]),
+        )
+
+        self.sec_badge_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor=ACCENT_GREEN)
+        self.sec_badge_text = ft.Text("Intègre", size=11, color=TEXT_SECONDARY, weight=ft.FontWeight.W_500)
+
+        # 1) Vue Messages (iMessage)
         self.chat_list = ft.ListView(
             expand=True,
             spacing=8,
@@ -783,6 +940,189 @@ class DoubleRatchetApp:
             ),
         )
 
+        self.chat_view_container = ft.Column(
+            expand=True,
+            spacing=10,
+            controls=[
+                ft.Container(
+                    expand=True,
+                    bgcolor=BG_WINDOW,
+                    border_radius=12,
+                    border=BORDER.all(1, BORDER_HAIRLINE),
+                    content=self.chat_list,
+                ),
+                alice_controls,
+                bob_controls,
+            ],
+        )
+
+        # 2) Vue Audit Sécurité (Forward Secrecy & Post-Compromise Security)
+        self.sec_status_banner = ft.Container(
+            bgcolor=BG_SUBTLE,
+            padding=12,
+            border_radius=12,
+            border=BORDER.all(1, BORDER_HAIRLINE),
+        )
+
+        self.sec_stolen_keys_text = ft.Text(
+            "Aucune clé compromise pour le moment.",
+            size=10.5,
+            font_family="monospace",
+            color=TEXT_SECONDARY,
+            selectable=True,
+        )
+
+        self.sec_audit_list = ft.ListView(
+            expand=True,
+            spacing=8,
+            auto_scroll=True,
+            padding=10,
+        )
+
+        self.security_view_container = ft.Column(
+            expand=True,
+            spacing=10,
+            visible=False,
+            controls=[
+                self.sec_status_banner,
+                # Scénarios guidés en 1 clic
+                ft.Container(
+                    bgcolor=BG_SUBTLE,
+                    padding=10,
+                    border_radius=12,
+                    border=BORDER.all(1, BORDER_HAIRLINE),
+                    content=ft.Column(
+                        spacing=8,
+                        controls=[
+                            ft.Text(
+                                "Démonstrations guidées (1 clic)",
+                                size=12,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_PRIMARY,
+                            ),
+                            ft.Row(
+                                spacing=8,
+                                controls=[
+                                    ft.Container(
+                                        expand=True,
+                                        bgcolor=BG_CARD,
+                                        padding=9,
+                                        border_radius=10,
+                                        border=BORDER.all(1, BORDER_HAIRLINE),
+                                        on_click=self._run_forward_secrecy_demo,
+                                        content=ft.Column(
+                                            spacing=3,
+                                            controls=[
+                                                ft.Row(
+                                                    spacing=5,
+                                                    controls=[
+                                                        ft.Icon(get_icon("HISTORY"), size=15, color=ACCENT_BLUE),
+                                                        ft.Text(
+                                                            "Forward Secrecy",
+                                                            size=12,
+                                                            weight=ft.FontWeight.W_600,
+                                                            color=TEXT_PRIMARY,
+                                                        ),
+                                                    ],
+                                                ),
+                                                ft.Text(
+                                                    "Vole la clé à t et teste les messages envoyés avant t.",
+                                                    size=10.5,
+                                                    color=TEXT_SECONDARY,
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                    ft.Container(
+                                        expand=True,
+                                        bgcolor=BG_CARD,
+                                        padding=9,
+                                        border_radius=10,
+                                        border=BORDER.all(1, BORDER_HAIRLINE),
+                                        on_click=self._run_pcs_demo,
+                                        content=ft.Column(
+                                            spacing=3,
+                                            controls=[
+                                                ft.Row(
+                                                    spacing=5,
+                                                    controls=[
+                                                        ft.Icon(get_icon("HEALTH_AND_SAFETY_OUTLINED", "AUTORENEW"), size=15, color=ACCENT_INDIGO),
+                                                        ft.Text(
+                                                            "Post-Compromise",
+                                                            size=12,
+                                                            weight=ft.FontWeight.W_600,
+                                                            color=TEXT_PRIMARY,
+                                                        ),
+                                                    ],
+                                                ),
+                                                ft.Text(
+                                                    "Compromet à t, puis montre la guérison au prochain DH.",
+                                                    size=10.5,
+                                                    color=TEXT_SECONDARY,
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                ],
+                            ),
+                            ft.Row(
+                                spacing=8,
+                                controls=[
+                                    ft.OutlinedButton(
+                                        "Voler état d'Alice à t",
+                                        icon=get_icon("WARNING_AMBER_ROUNDED", "WARNING"),
+                                        style=ft.ButtonStyle(
+                                            shape=ft.RoundedRectangleBorder(radius=8),
+                                            side=ft.BorderSide(1, ACCENT_RED),
+                                            color=ACCENT_RED,
+                                        ),
+                                        on_click=lambda _: self._compromise_actor("Alice"),
+                                    ),
+                                    ft.OutlinedButton(
+                                        "Voler état de Bob à t",
+                                        icon=get_icon("WARNING_AMBER_ROUNDED", "WARNING"),
+                                        style=ft.ButtonStyle(
+                                            shape=ft.RoundedRectangleBorder(radius=8),
+                                            side=ft.BorderSide(1, ACCENT_RED),
+                                            color=ACCENT_RED,
+                                        ),
+                                        on_click=lambda _: self._compromise_actor("Bob"),
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                ),
+                # Snapshot des clés volées
+                ft.Container(
+                    bgcolor=BG_SUBTLE,
+                    padding=10,
+                    border_radius=10,
+                    border=BORDER.all(1, BORDER_HAIRLINE),
+                    content=ft.Column(
+                        spacing=4,
+                        controls=[
+                            ft.Text(
+                                "CLÉS INTERCEPTÉES PAR L'ATTAQUANT À L'INSTANT t",
+                                size=10,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_TERTIARY,
+                            ),
+                            self.sec_stolen_keys_text,
+                        ],
+                    ),
+                ),
+                # Journal cryptographique des tentatives de déchiffrement
+                ft.Container(
+                    expand=True,
+                    bgcolor=BG_WINDOW,
+                    border_radius=12,
+                    border=BORDER.all(1, BORDER_HAIRLINE),
+                    content=self.sec_audit_list,
+                ),
+            ],
+        )
+
         right_pane = ft.Container(
             expand=4,
             bgcolor=BG_CARD,
@@ -795,31 +1135,17 @@ class DoubleRatchetApp:
                 controls=[
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         controls=[
-                            ft.Text(
-                                "Messages",
-                                size=14,
-                                weight=ft.FontWeight.W_600,
-                                color=TEXT_PRIMARY,
-                            ),
+                            right_tabs,
                             ft.Row(
-                                spacing=4,
-                                controls=[
-                                    ft.Icon(get_icon("LOCK"), color=TEXT_TERTIARY, size=13),
-                                    ft.Text("Chiffré de bout en bout", size=11, color=TEXT_TERTIARY),
-                                ],
+                                spacing=5,
+                                controls=[self.sec_badge_dot, self.sec_badge_text],
                             ),
                         ],
                     ),
-                    ft.Container(
-                        expand=True,
-                        bgcolor=BG_WINDOW,
-                        border_radius=12,
-                        border=BORDER.all(1, BORDER_HAIRLINE),
-                        content=self.chat_list,
-                    ),
-                    alice_controls,
-                    bob_controls,
+                    self.chat_view_container,
+                    self.security_view_container,
                 ],
             ),
         )
@@ -840,6 +1166,7 @@ class DoubleRatchetApp:
             )
         )
         self._update_mode_buttons_style()
+        self._update_right_tab_style()
 
     def _legend_dot(self, color: str, label: str) -> ft.Control:
         return ft.Row(
@@ -849,6 +1176,315 @@ class DoubleRatchetApp:
                 ft.Text(label, size=11, color=TEXT_SECONDARY),
             ],
         )
+
+    # ------------------------------------------------------------------
+    # Gestion des onglets du panneau droit & de l'audit sécurité
+    # ------------------------------------------------------------------
+    def _set_right_tab(self, tab: str):
+        self.right_tab = tab
+        self.chat_view_container.visible = tab == "chat"
+        self.security_view_container.visible = tab == "security"
+        self._update_right_tab_style()
+        self._refresh_security_panel()
+        self.page.update()
+
+    def _update_right_tab_style(self):
+        if self.right_tab == "chat":
+            self.tab_chat_btn.bgcolor = BG_CARD
+            self.tab_chat_btn.shadow = self._card_shadow()
+            self.tab_chat_btn.content.color = TEXT_PRIMARY
+            self.tab_sec_btn.bgcolor = None
+            self.tab_sec_btn.shadow = None
+            self.tab_sec_btn.content.controls[0].color = TEXT_SECONDARY
+            self.tab_sec_btn.content.controls[1].color = TEXT_SECONDARY
+        else:
+            self.tab_sec_btn.bgcolor = BG_CARD
+            self.tab_sec_btn.shadow = self._card_shadow()
+            self.tab_sec_btn.content.controls[0].color = ACCENT_BLUE
+            self.tab_sec_btn.content.controls[1].color = TEXT_PRIMARY
+            self.tab_chat_btn.bgcolor = None
+            self.tab_chat_btn.shadow = None
+            self.tab_chat_btn.content.color = TEXT_SECONDARY
+
+    def _compromise_actor(self, victim_name: str, silent: bool = False):
+        if self.pending_updates:
+            self._on_finish_all_click(None)
+
+        victim_state = self.alice if victim_name == "Alice" else self.bob
+        t_idx = len(self.captured_packets)
+        self.attacker = AttackerSimulator(victim_name, victim_state, t_idx)
+        self.audit_results.clear()
+
+        # Test immédiat de Forward Secrecy sur tous les paquets envoyés AVANT t
+        for pkt in self.captured_packets:
+            success, detail = self.attacker.attack_past_packet(pkt)
+            self.audit_results.append(
+                {
+                    "msg_num": pkt["index"],
+                    "era": "AVANT t (Forward Secrecy)",
+                    "route": f"{pkt['sender']} → {pkt['receiver']}",
+                    "compromised": success,
+                    "detail": detail,
+                }
+            )
+
+        self.chat_list.controls.append(
+            self._make_system_banner(
+                f"Compromission simulée : état de {victim_name} volé à t (après {t_idx} message(s))"
+            )
+        )
+        self._refresh_all_ui()
+        if not silent:
+            self._notify(f"Clés de {victim_name} compromises à t ! Vérifiez l'Audit Sécurité.")
+
+    def _evaluate_packet_with_attacker(self, pkt: dict):
+        if self.attacker is None:
+            return
+        success, detail = self.attacker.attack_future_packet(pkt)
+        era_label = (
+            "APRÈS t · Avant DH Ratchet"
+            if success
+            else "APRÈS t · Post-Compromise (Guéri)"
+        )
+        self.audit_results.append(
+            {
+                "msg_num": pkt["index"],
+                "era": era_label,
+                "route": f"{pkt['sender']} → {pkt['receiver']}",
+                "compromised": success,
+                "detail": detail,
+            }
+        )
+
+    def _run_forward_secrecy_demo(self, _):
+        """Scénario complet en 1 clic : Forward Secrecy."""
+        prev_mode = self.execution_mode
+        self.execution_mode = "instant"
+        self._update_mode_buttons_style()
+        self._reset_session(initial=True)
+
+        # 1. Messages envoyés AVANT la compromission (t)
+        self.alice_input.value = "Code coffre-fort : 4815"
+        self._handle_send("Alice", "Bob", delayed=False)
+
+        self.alice_input.value = "Rendez-vous à 14h30"
+        self._handle_send("Alice", "Bob", delayed=False)
+
+        # 2. Compromission de l'état d'Alice à l'instant t
+        self._compromise_actor("Alice", silent=True)
+
+        self.execution_mode = prev_mode
+        self._update_mode_buttons_style()
+        self._set_right_tab("security")
+        self._notify("Démo Forward Secrecy exécutée : les messages avant t sont indéchiffrables.")
+
+    def _run_pcs_demo(self, _):
+        """Scénario complet en 1 clic : Post-Compromise Security (guérison après DH Ratchet)."""
+        prev_mode = self.execution_mode
+        self.execution_mode = "instant"
+        self._update_mode_buttons_style()
+        self._reset_session(initial=True)
+
+        # 1. Message #1 avant compromission
+        self.alice_input.value = "Message #1 (avant attaque)"
+        self._handle_send("Alice", "Bob", delayed=False)
+
+        # 2. Compromission d'Alice à t
+        self._compromise_actor("Alice", silent=True)
+
+        # 3. Message #2 envoyé par Alice sans renouvellement DH -> l'attaquant peut le lire !
+        self.alice_input.value = "Message #2 (sans rotation DH)"
+        self._handle_send("Alice", "Bob", delayed=False)
+
+        # 4. Bob répond (#3) -> déclenche un Ratchet DH X25519 chez Bob et Alice -> GUÉRISON !
+        self.bob_input.value = "Message #3 (réponse Bob -> Ratchet DH)"
+        self._handle_send("Bob", "Alice", delayed=False)
+
+        # 5. Alice renvoie (#4) avec sa nouvelle clé DHs -> totalement hors de portée de l'attaquant
+        self.alice_input.value = "Message #4 (après guérison PCS)"
+        self._handle_send("Alice", "Bob", delayed=False)
+
+        self.execution_mode = prev_mode
+        self._update_mode_buttons_style()
+        self._set_right_tab("security")
+        self._notify("Démo Post-Compromise exécutée : le Ratchet DH a guéri la session !")
+
+    def _refresh_security_panel(self):
+        if self.attacker is None:
+            self.sec_badge_dot.bgcolor = ACCENT_GREEN
+            self.sec_badge_text.value = "Intègre"
+            self.sec_stolen_keys_text.value = "Aucune clé volée. Cliquez sur « Voler état » ou lancez une démo."
+            self.sec_status_banner.bgcolor = ACCENT_GREEN_SOFT
+            self.sec_status_banner.border = BORDER.all(1, ACCENT_GREEN)
+            self.sec_status_banner.content = ft.Row(
+                spacing=10,
+                controls=[
+                    ft.Icon(get_icon("VERIFIED_USER_OUTLINED", "LOCK"), color=ACCENT_GREEN, size=20),
+                    ft.Column(
+                        spacing=2,
+                        expand=True,
+                        controls=[
+                            ft.Text(
+                                "Session chiffrée saine",
+                                size=12.5,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_PRIMARY,
+                            ),
+                            ft.Text(
+                                "Testez la Forward Secrecy (passé protégé) et la Post-Compromise Security (guérison après échange DH).",
+                                size=11,
+                                color=TEXT_SECONDARY,
+                            ),
+                        ],
+                    ),
+                ],
+            )
+            self.sec_audit_list.controls = [
+                ft.Container(
+                    padding=16,
+                    alignment=CENTER_ALIGN,
+                    content=ft.Text(
+                        "Les tentatives de déchiffrement de l'attaquant s'afficheront ici en temps réel.",
+                        size=11.5,
+                        color=TEXT_TERTIARY,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                )
+            ]
+            return
+
+        # L'attaquant est actif
+        att = self.attacker
+        self.sec_stolen_keys_text.value = (
+            f"Victime : {att.victim_name} (à t = après msg #{att.compromise_msg_index})\n"
+            f"RK volée  : {short_hex(att.stolen_RK, 8, 6)}\n"
+            f"CKs volée : {short_hex(att.stolen_CKs, 8, 6)}\n"
+            f"CKr volée : {short_hex(att.stolen_CKr, 8, 6)}\n"
+            f"DHs_priv  : {short_hex(att.stolen_DHs[0] if att.stolen_DHs else None, 8, 6)}"
+        )
+
+        if att.healed:
+            self.sec_badge_dot.bgcolor = ACCENT_GREEN
+            self.sec_badge_text.value = "Guéri (PCS)"
+            self.sec_status_banner.bgcolor = ACCENT_GREEN_SOFT
+            self.sec_status_banner.border = BORDER.all(1, ACCENT_GREEN)
+            self.sec_status_banner.content = ft.Row(
+                spacing=10,
+                controls=[
+                    ft.Icon(get_icon("CHECK_CIRCLE_OUTLINE", "LOCK"), color=ACCENT_GREEN, size=20),
+                    ft.Column(
+                        spacing=2,
+                        expand=True,
+                        controls=[
+                            ft.Text(
+                                "Sécurité restaurée (Post-Compromise Security)",
+                                size=12.5,
+                                weight=ft.FontWeight.W_600,
+                                color=TEXT_PRIMARY,
+                            ),
+                            ft.Text(
+                                "Un nouvel échange Diffie-Hellman X25519 a renouvelé RK. L'attaquant est définitivement expulsé.",
+                                size=11,
+                                color=TEXT_SECONDARY,
+                            ),
+                        ],
+                    ),
+                ],
+            )
+        else:
+            self.sec_badge_dot.bgcolor = ACCENT_RED
+            self.sec_badge_text.value = "Compromis à t"
+            self.sec_status_banner.bgcolor = ACCENT_RED_SOFT
+            self.sec_status_banner.border = BORDER.all(1, ACCENT_RED)
+            self.sec_status_banner.content = ft.Row(
+                spacing=10,
+                controls=[
+                    ft.Icon(get_icon("GPP_BAD_OUTLINED", "WARNING"), color=ACCENT_RED, size=20),
+                    ft.Column(
+                        spacing=2,
+                        expand=True,
+                        controls=[
+                            ft.Text(
+                                f"État de {att.victim_name} compromis à l'instant t",
+                                size=12.5,
+                                weight=ft.FontWeight.W_600,
+                                color=ACCENT_RED,
+                            ),
+                            ft.Text(
+                                "Le passé (< t) est protégé, mais tant qu'aucun Ratchet DH n'a lieu, l'attaquant peut suivre la chaîne symétrique.",
+                                size=11,
+                                color=TEXT_SECONDARY,
+                            ),
+                        ],
+                    ),
+                ],
+            )
+
+        cards = []
+        if not self.audit_results:
+            cards.append(
+                ft.Container(
+                    padding=12,
+                    content=ft.Text(
+                        "Envoyez maintenant des messages entre Alice et Bob pour observer l'attaque et la guérison DH.",
+                        size=11.5,
+                        color=TEXT_SECONDARY,
+                    ),
+                )
+            )
+        else:
+            for item in self.audit_results:
+                is_vuln = item["compromised"]
+                c_bg = ACCENT_RED_SOFT if is_vuln else BG_CARD
+                c_border = ACCENT_RED if is_vuln else ACCENT_GREEN
+                c_icon = get_icon("LOCK_OPEN_OUTLINED", "WARNING") if is_vuln else get_icon("LOCK_OUTLINE", "LOCK")
+                c_fg = ACCENT_RED if is_vuln else ACCENT_GREEN
+                badge_lbl = "DÉCHIFFRÉ PAR ATTAQUANT" if is_vuln else "PROTÉGÉ (INDÉCHIFFRABLE)"
+
+                cards.append(
+                    ft.Container(
+                        bgcolor=c_bg,
+                        border=BORDER.all(1.2, c_border),
+                        border_radius=10,
+                        padding=9,
+                        content=ft.Column(
+                            spacing=3,
+                            controls=[
+                                ft.Row(
+                                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                    controls=[
+                                        ft.Row(
+                                            spacing=5,
+                                            controls=[
+                                                ft.Icon(c_icon, size=14, color=c_fg),
+                                                ft.Text(
+                                                    f"Msg #{item['msg_num']} · {item['route']}",
+                                                    size=11.5,
+                                                    weight=ft.FontWeight.W_600,
+                                                    color=TEXT_PRIMARY,
+                                                ),
+                                            ],
+                                        ),
+                                        ft.Text(
+                                            badge_lbl,
+                                            size=9.5,
+                                            weight=ft.FontWeight.W_600,
+                                            color=c_fg,
+                                        ),
+                                    ],
+                                ),
+                                ft.Text(item["era"], size=10, color=TEXT_TERTIARY),
+                                ft.Text(
+                                    item["detail"],
+                                    size=11,
+                                    font_family="monospace",
+                                    color=TEXT_PRIMARY,
+                                ),
+                            ],
+                        ),
+                    )
+                )
+        self.sec_audit_list.controls = cards
 
     # ------------------------------------------------------------------
     # Cartes minimalistes et connecteurs du schéma visuel
@@ -1126,7 +1762,7 @@ class DoubleRatchetApp:
             self.seg_instant.content.color = TEXT_SECONDARY
 
     def _notify(self, text: str):
-        snack = ft.SnackBar(ft.Text(text), duration=2200)
+        snack = ft.SnackBar(ft.Text(text), duration=2400)
         if hasattr(self.page, "open"):
             self.page.open(snack)
         else:
@@ -1285,6 +1921,18 @@ class DoubleRatchetApp:
         # ÉTAPE 3 : encrypt_symmetric
         ciphertext = encrypt_symmetric(mk, plaintext_bytes, AD + header_bytes)
         sender.Ns += 1
+
+        # Enregistrement dans la capture réseau & évaluation si attaquant actif
+        pkt_record = {
+            "index": len(self.captured_packets) + 1,
+            "sender": sender_name,
+            "receiver": receiver_name,
+            "header": header_bytes,
+            "ciphertext": ciphertext,
+            "plaintext": text,
+        }
+        self.captured_packets.append(pkt_record)
+        self._evaluate_packet_with_attacker(pkt_record)
 
         def on_sent_done(s_name=sender_name, r_name=receiver_name, is_del=delayed, size=len(ciphertext)):
             if is_del:
@@ -1752,6 +2400,7 @@ class DoubleRatchetApp:
 
         self._rebuild_visual_schema()
         self._refresh_detail_panel()
+        self._refresh_security_panel()
         self.page.update()
 
 

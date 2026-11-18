@@ -298,7 +298,7 @@ class AttackerSimulator:
 
         if is_victim_sender:
             # La victime envoie un message
-            if dh_pub != self.clone_DHs[1]:
+            if self.clone_DHs is None or dh_pub != self.clone_DHs[1]:
                 # La victime a généré une nouvelle paire X25519 lors d'un DH Ratchet :
                 # l'attaquant ne possède pas la nouvelle clé privée DHs_priv !
                 self.healed = True
@@ -321,7 +321,7 @@ class AttackerSimulator:
                 # L'interlocuteur a fait tourner sa clé DH !
                 # L'attaquant peut encore calculer le 1er pas DH s'il a encore l'ancienne DHs_priv de la victime,
                 # mais dès que la victime génère sa nouvelle DHs au tour suivant, l'attaquant perd définitivement le fil.
-                if not self.healed and self.clone_DHs is not None:
+                if not self.healed and self.clone_DHs is not None and self.clone_RK is not None:
                     try:
                         dh_out = x25519(self.clone_DHs[0], dh_pub)
                         self.clone_RK, self.clone_CKr = kdf_rk(self.clone_RK, dh_out)
